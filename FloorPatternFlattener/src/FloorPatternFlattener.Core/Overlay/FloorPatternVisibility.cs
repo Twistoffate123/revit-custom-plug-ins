@@ -29,6 +29,7 @@ namespace FloorPatternFlattener.Overlay
                     }
                     catch
                     {
+                        // Element or API may not support overrides in this context.
                     }
                 }
                 tx.Commit();
@@ -47,10 +48,12 @@ namespace FloorPatternFlattener.Overlay
                 {
                     try
                     {
+                        // Reset to default overrides for a clean restore.
                         view.SetElementOverrides(id, new OverrideGraphicSettings());
                     }
                     catch
                     {
+                        // ignore
                     }
                 }
                 tx.Commit();
@@ -59,12 +62,14 @@ namespace FloorPatternFlattener.Overlay
 
         private static void TrySetSurfacePatternVisible(OverrideGraphicSettings ogs, bool visible)
         {
+            // Revit 2019+ introduced surface foreground/background pattern visibility.
             try
             {
                 ogs.SetSurfaceForegroundPatternVisible(visible);
             }
             catch
             {
+                // Method missing or rejected
             }
 
             try
@@ -73,8 +78,10 @@ namespace FloorPatternFlattener.Overlay
             }
             catch
             {
+                // Method missing or rejected
             }
 
+            // Older naming in some builds
             try
             {
                 var mi = typeof(OverrideGraphicSettings).GetMethod(
@@ -84,6 +91,7 @@ namespace FloorPatternFlattener.Overlay
             }
             catch
             {
+                // ignore
             }
         }
     }
