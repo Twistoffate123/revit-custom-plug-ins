@@ -1,0 +1,45 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.8.34330.188
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FloorPatternFlattener.2023", "src\FloorPatternFlattener.2023\FloorPatternFlattener.2023.csproj", "{A1111111-2023-4000-8000-000000002023}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FloorPatternFlattener.2024", "src\FloorPatternFlattener.2024\FloorPatternFlattener.2024.csproj", "{A1111111-2024-4000-8000-000000002024}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FloorPatternFlattener.2025", "src\FloorPatternFlattener.2025\FloorPatternFlattener.2025.csproj", "{A1111111-2025-4000-8000-000000002025}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FloorPatternFlattener.2026", "src\FloorPatternFlattener.2026\FloorPatternFlattener.2026.csproj", "{A1111111-2026-4000-8000-000000002026}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FloorPatternFlattener.2027", "src\FloorPatternFlattener.2027\FloorPatternFlattener.2027.csproj", "{A1111111-2027-4000-8000-000000002027}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{A1111111-2023-4000-8000-000000002023}.Debug|x64.ActiveCfg = Debug|x64
+		{A1111111-2023-4000-8000-000000002023}.Debug|x64.Build.0 = Debug|x64
+		{A1111111-2023-4000-8000-000000002023}.Release|x64.ActiveCfg = Release|x64
+		{A1111111-2023-4000-8000-000000002023}.Release|x64.Build.0 = Release|x64
+		{A1111111-2024-4000-8000-000000002024}.Debug|x64.ActiveCfg = Debug|x64
+		{A1111111-2024-4000-8000-000000002024}.Debug|x64.Build.0 = Debug|x64
+		{A1111111-2024-4000-8000-000000002024}.Release|x64.ActiveCfg = Release|x64
+		{A1111111-2024-4000-8000-000000002024}.Release|x64.Build.0 = Release|x64
+		{A1111111-2025-4000-8000-000000002025}.Debug|x64.ActiveCfg = Debug|x64
+		{A1111111-2025-4000-8000-000000002025}.Debug|x64.Build.0 = Debug|x64
+		{A1111111-2025-4000-8000-000000002025}.Release|x64.ActiveCfg = Release|x64
+		{A1111111-2025-4000-8000-000000002025}.Release|x64.Build.0 = Release|x64
+		{A1111111-2026-4000-8000-000000002026}.Debug|x64.ActiveCfg = Debug|x64
+		{A1111111-2026-4000-8000-000000002026}.Debug|x64.Build.0 = Debug|x64
+		{A1111111-2026-4000-8000-000000002026}.Release|x64.ActiveCfg = Release|x64
+		{A1111111-2026-4000-8000-000000002026}.Release|x64.Build.0 = Release|x64
+		{A1111111-2027-4000-8000-000000002027}.Debug|x64.ActiveCfg = Debug|x64
+		{A1111111-2027-4000-8000-000000002027}.Debug|x64.Build.0 = Debug|x64
+		{A1111111-2027-4000-8000-000000002027}.Release|x64.ActiveCfg = Release|x64
+		{A1111111-2027-4000-8000-000000002027}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

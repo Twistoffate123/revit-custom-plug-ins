@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Template Revit add-in manifest.
+  Install-Addin.ps1 copies this file into:
+    %AppData%\Autodesk\Revit\Addins\20XX\FloorPatternFlattener.addin
+  and rewrites <Assembly> to the built DLL path for that year.
+
+  Manual install: set Assembly to the full path of FloorPatternFlattener.dll
+  built for the matching Revit year, then place under the Addins\20XX folder.
+-->
+<RevitAddIns>
+  <AddIn Type="Application">
+    <Name>Floor Pattern Flattener</Name>
+    <Assembly>FloorPatternFlattener.dll</Assembly>
+    <FullClassName>FloorPatternFlattener.App</FullClassName>
+    <ClientId>B2E8D401-9C5A-4F17-8E3D-6A1B0C9F4E72</ClientId>
+    <VendorId>FPF</VendorId>
+    <VendorDescription>Floor Pattern Flattener contributors</VendorDescription>
+  </AddIn>
+</RevitAddIns>

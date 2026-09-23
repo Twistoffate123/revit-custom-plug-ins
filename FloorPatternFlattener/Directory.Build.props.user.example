@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Copy to Directory.Build.props.user and adjust paths if Revit is not in the default location. -->
+<Project>
+  <PropertyGroup>
+    <Revit2023Path>C:\Program Files\Autodesk\Revit 2023</Revit2023Path>
+    <Revit2024Path>C:\Program Files\Autodesk\Revit 2024</Revit2024Path>
+    <Revit2025Path>C:\Program Files\Autodesk\Revit 2025</Revit2025Path>
+    <Revit2026Path>C:\Program Files\Autodesk\Revit 2026</Revit2026Path>
+    <Revit2027Path>C:\Program Files\Autodesk\Revit 2027</Revit2027Path>
+  </PropertyGroup>
+</Project>
