@@ -1,0 +1,32 @@
+## Build
+bin/
+obj/
+[Bb]uild/
+[Ll]og/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+*.DotSettings.user
+
+## User local Revit paths
+Directory.Build.props.user
+
+## Autodesk / local copies (never commit)
+**/RevitAPI.dll
+**/RevitAPIUI.dll
+**/AdWindows.dll
+*.pdb
+*.dll
+!**/packages/**
+
+## OS / IDE
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+*.ncrunch*
+_NCrunch_*
+*.local.json
