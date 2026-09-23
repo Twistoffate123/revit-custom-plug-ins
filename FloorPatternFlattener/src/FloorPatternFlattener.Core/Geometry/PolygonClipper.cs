@@ -6,7 +6,7 @@ namespace FloorPatternFlattener.Geometry
 {
     /// <summary>
     /// 2D polygon helpers in the XY plane (Z ignored for clipping; restored by caller).
-    /// Sutherland–Hodgman polygon clip + segment-vs-convex/non-convex polygon clip.
+    /// Sutherland-Hodgman polygon clip + segment-vs-convex/non-convex polygon clip.
     /// </summary>
     public static class PolygonClipper
     {
@@ -49,10 +49,6 @@ namespace FloorPatternFlattener.Geometry
             }
         }
 
-        /// <summary>
-        /// Clip an infinite family of parallel hatch lines against a closed XY polygon.
-        /// Returns pairs of XYZ endpoints at z=0; caller lifts Z.
-        /// </summary>
         public static List<(XYZ A, XYZ B)> ClipParallelLines(
             IList<XYZ> closedXyPolygon,
             double spacing,
@@ -69,12 +65,9 @@ namespace FloorPatternFlattener.Geometry
 
             var cos = Math.Cos(angleRadians);
             var sin = Math.Sin(angleRadians);
-            // Direction of hatch lines
             var dir = new XYZ(cos, sin, 0);
-            // Perpendicular offset direction
             var perp = new XYZ(-sin, cos, 0);
 
-            // Project bbox corners onto perp to find offset range
             var corners = new[]
             {
                 new XYZ(minX, minY, 0),
@@ -91,7 +84,6 @@ namespace FloorPatternFlattener.Geometry
                 if (t > maxT) maxT = t;
             }
 
-            // Extend slightly so edges are covered
             minT -= spacing;
             maxT += spacing;
 
@@ -99,7 +91,6 @@ namespace FloorPatternFlattener.Geometry
             for (var t = startT; t <= maxT + Tol; t += spacing)
             {
                 var onLine = new XYZ(originX + perp.X * t, originY + perp.Y * t, 0);
-                // Long segment through bbox along dir
                 var diag = Math.Max(maxX - minX, maxY - minY) * 2.0 + spacing * 4.0;
                 if (diag < spacing) diag = spacing * 10.0;
                 var a = onLine - dir * diag;
@@ -133,7 +124,6 @@ namespace FloorPatternFlattener.Geometry
 
             hits.Sort((x, y) => x.U.CompareTo(y.U));
 
-            // Deduplicate close parameters
             var unique = new List<(double U, XYZ P)>();
             foreach (var h in hits)
             {
@@ -162,7 +152,6 @@ namespace FloorPatternFlattener.Geometry
 
         public static bool PointInPolygon(XYZ p, IList<XYZ> closedXyPolygon)
         {
-            // Ray casting
             var inside = false;
             var poly = EnsureClosed(closedXyPolygon);
             for (int i = 0, j = poly.Count - 1; i < poly.Count; j = i++)
@@ -183,7 +172,7 @@ namespace FloorPatternFlattener.Geometry
             var r = b - a;
             var s = d - c;
             var rxs = r.X * s.Y - r.Y * s.X;
-            if (Math.Abs(rxs) < Tol) return false; // parallel
+            if (Math.Abs(rxs) < Tol) return false;
             var q = c - a;
             u = (q.X * s.Y - q.Y * s.X) / rxs;
             var t = (q.X * r.Y - q.Y * r.X) / rxs;
