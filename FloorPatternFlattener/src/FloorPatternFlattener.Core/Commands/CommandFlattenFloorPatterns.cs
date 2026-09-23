@@ -16,60 +16,70 @@ namespace FloorPatternFlattener.Commands
     {
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
-            var uiapp = commandData.Application;
-            var uidoc = uiapp.ActiveUIDocument;
-            if (uidoc == null)
-            {
-                message = "No active document.";
-                return Result.Failed;
-            }
-
-            var doc = uidoc.Document;
-            FloorPatternOverlayServer.EnsureRegistered();
-
-            List<ElementId> floorIds;
             try
             {
-                floorIds = CollectFloors(uidoc, doc);
-            }
-            catch (Autodesk.Revit.Exceptions.OperationCanceledException)
-            {
-                return Result.Cancelled;
+                var uidoc = commandData.Application.ActiveUIDocument;
+                if (uidoc == null)
+                {
+                    TaskDialog.Show("Floor Pattern Flattener", "Open a model first.");
+                    return Result.Cancelled;
+                }
+
+                var doc = uidoc.Document;
+                if (doc.IsReadOnly)
+                {
+                    TaskDialog.Show("Floor Pattern Flattener", "This document is read-only. Overlay graphics can still draw after Flatten, but native pattern hide will be skipped.");
+                }
+
+                FloorPatternOverlayServer.EnsureRegistered();
+
+                List<ElementId> floorIds;
+                try
+                {
+                    floorIds = CollectFloors(uidoc, doc);
+                }
+                catch (Autodesk.Revit.Exceptions.OperationCanceledException)
+                {
+                    return Result.Cancelled;
+                }
+
+                if (floorIds == null || floorIds.Count == 0)
+                {
+                    TaskDialog.Show("Floor Pattern Flattener",
+                        "No Floor elements selected.\n\nSelect one or more Floors, then run Flatten Floor Patterns again.");
+                    return Result.Cancelled;
+                }
+
+                FlattenSession.AddFloors(doc, floorIds);
+
+                try
+                {
+                    FloorPatternVisibility.HideNativeSurfacePatterns(doc, uidoc.ActiveView, floorIds);
+                }
+                catch (Exception ex)
+                {
+                    TaskDialog.Show("Floor Pattern Flattener",
+                        "Overlay is active, but hiding native surface patterns failed:\n" + ex.Message +
+                        "\n\nWorkshared elements owned by another user, or a detached model, can cause this.");
+                }
+
+                FloorPatternOverlayServer.InvalidateCache();
+                FloorPatternOverlayServer.RefreshViews(doc, uidoc);
+
+                TaskDialog.Show("Floor Pattern Flattener",
+                    $"Flattened hatch overlay active for {floorIds.Count} floor(s).\n\n" +
+                    "Open or refresh a 3D view to see plan-flat patterns. " +
+                    "Native surface patterns are hidden in non-template 3D views when the document is writable.\n\n" +
+                    "This overlay is session-only. It is not saved in the RVT. Re-run Flatten after reopen.");
+
+                return Result.Succeeded;
             }
             catch (Exception ex)
             {
                 message = ex.Message;
+                TaskDialog.Show("Floor Pattern Flattener", ex.Message);
                 return Result.Failed;
             }
-
-            if (floorIds == null || floorIds.Count == 0)
-            {
-                TaskDialog.Show("Floor Pattern Flattener",
-                    "No Floor elements selected.\n\nSelect one or more Floors, then run Flatten Floor Patterns again.");
-                return Result.Cancelled;
-            }
-
-            FlattenSession.AddFloors(doc, floorIds);
-
-            try
-            {
-                if (uidoc.ActiveView != null)
-                    FloorPatternVisibility.HideNativeSurfacePatterns(doc, uidoc.ActiveView, floorIds);
-            }
-            catch (Exception ex)
-            {
-                TaskDialog.Show("Floor Pattern Flattener",
-                    "Overlay registered, but native pattern hide failed:\n" + ex.Message);
-            }
-
-            FloorPatternOverlayServer.RefreshViews(doc, uidoc);
-
-            TaskDialog.Show("Floor Pattern Flattener",
-                $"Flattened hatch overlay active for {floorIds.Count} floor(s).\n\n" +
-                "Open or refresh a 3D view to see plan-flat patterns. " +
-                "Sheets that place that 3D view will show the overlay when DirectContext3D is available.");
-
-            return Result.Succeeded;
         }
 
         private static List<ElementId> CollectFloors(UIDocument uidoc, Document doc)

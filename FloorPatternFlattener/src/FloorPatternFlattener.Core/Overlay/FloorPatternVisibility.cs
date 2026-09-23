@@ -1,98 +1,105 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Autodesk.Revit.DB;
 
 namespace FloorPatternFlattener.Overlay
 {
     /// <summary>
-    /// Best-effort: hide native model surface patterns on flattened floors in the active view
+    /// Hide or restore native model surface patterns on flattened floors in 3D views
     /// so the DirectContext3D overlay is not doubled with the skewed pattern.
-    /// Availability of surface-pattern visibility overrides varies by Revit year.
+    /// All writes run inside a Transaction unless the document is already modifiable.
     /// </summary>
     public static class FloorPatternVisibility
     {
-        public static void HideNativeSurfacePatterns(Document doc, View view, IEnumerable<ElementId> floorIds)
+        public static void HideNativeSurfacePatterns(Document doc, View preferredView, IEnumerable<ElementId> floorIds)
         {
-            if (doc == null || view == null || floorIds == null) return;
-            if (view.IsTemplate) return;
+            Apply(doc, preferredView, floorIds, hide: true);
+        }
 
-            using (var tx = new Transaction(doc, "Hide floor surface patterns (overlay)"))
+        public static void RestoreNativeSurfacePatterns(Document doc, View preferredView, IEnumerable<ElementId> floorIds)
+        {
+            Apply(doc, preferredView, floorIds, hide: false);
+        }
+
+        private static void Apply(Document doc, View preferredView, IEnumerable<ElementId> floorIds, bool hide)
+        {
+            if (doc == null || floorIds == null) return;
+            if (doc.IsReadOnly) return;
+
+            var ids = floorIds.Where(id => id != null && id != ElementId.InvalidElementId).ToList();
+            if (ids.Count == 0) return;
+
+            var views = CollectTargetViews(doc, preferredView);
+            if (views.Count == 0) return;
+
+            var name = hide ? "Hide floor surface patterns" : "Restore floor surface patterns";
+            var startedHere = false;
+            Transaction tx = null;
+
+            try
             {
-                tx.Start();
-                foreach (var id in floorIds)
+                if (!doc.IsModifiable)
                 {
-                    try
+                    tx = new Transaction(doc, name);
+                    if (tx.Start() != TransactionStatus.Started)
+                        return;
+                    startedHere = true;
+                }
+
+                foreach (var view in views)
+                {
+                    foreach (var id in ids)
                     {
-                        var ogs = view.GetElementOverrides(id) ?? new OverrideGraphicSettings();
-                        TrySetSurfacePatternVisible(ogs, false);
-                        view.SetElementOverrides(id, ogs);
-                    }
-                    catch
-                    {
-                        // Element or API may not support overrides in this context.
+                        if (doc.GetElement(id) == null) continue;
+
+                        if (hide)
+                        {
+                            var ogs = view.GetElementOverrides(id) ?? new OverrideGraphicSettings();
+                            SetSurfacePatternVisible(ogs, false);
+                            view.SetElementOverrides(id, ogs);
+                        }
+                        else
+                        {
+                            view.SetElementOverrides(id, new OverrideGraphicSettings());
+                        }
                     }
                 }
-                tx.Commit();
+
+                if (startedHere)
+                    tx.Commit();
+            }
+            catch
+            {
+                if (startedHere && tx != null && tx.HasStarted())
+                    tx.RollBack();
+                throw;
+            }
+            finally
+            {
+                if (startedHere)
+                    tx?.Dispose();
             }
         }
 
-        public static void RestoreNativeSurfacePatterns(Document doc, View view, IEnumerable<ElementId> floorIds)
+        private static List<View> CollectTargetViews(Document doc, View preferredView)
         {
-            if (doc == null || view == null || floorIds == null) return;
-            if (view.IsTemplate) return;
+            var list = new FilteredElementCollector(doc)
+                .OfClass(typeof(View3D))
+                .Cast<View3D>()n                .Where(v => v != null && !v.IsTemplate)
+                .Cast<View>()
+                .ToList();
 
-            using (var tx = new Transaction(doc, "Restore floor surface patterns"))
-            {
-                tx.Start();
-                foreach (var id in floorIds)
-                {
-                    try
-                    {
-                        // Reset to default overrides for a clean restore.
-                        view.SetElementOverrides(id, new OverrideGraphicSettings());
-                    }
-                    catch
-                    {
-                        // ignore
-                    }
-                }
-                tx.Commit();
-            }
+            if (preferredView is View3D live && !live.IsTemplate && list.All(v => v.Id != live.Id))
+                list.Add(live);
+
+            return list;
         }
 
-        private static void TrySetSurfacePatternVisible(OverrideGraphicSettings ogs, bool visible)
+        private static void SetSurfacePatternVisible(OverrideGraphicSettings ogs, bool visible)
         {
-            // Revit 2019+ introduced surface foreground/background pattern visibility.
-            try
-            {
-                ogs.SetSurfaceForegroundPatternVisible(visible);
-            }
-            catch
-            {
-                // Method missing or rejected
-            }
-
-            try
-            {
-                ogs.SetSurfaceBackgroundPatternVisible(visible);
-            }
-            catch
-            {
-                // Method missing or rejected
-            }
-
-            // Older naming in some builds
-            try
-            {
-                var mi = typeof(OverrideGraphicSettings).GetMethod(
-                    "SetSurfacePatternVisible",
-                    new[] { typeof(bool) });
-                mi?.Invoke(ogs, new object[] { visible });
-            }
-            catch
-            {
-                // ignore
-            }
+            ogs.SetSurfaceForegroundPatternVisible(visible);
+            ogs.SetSurfaceBackgroundPatternVisible(visible);
         }
     }
 }

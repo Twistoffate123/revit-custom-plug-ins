@@ -37,6 +37,7 @@ namespace FloorPatternFlattener
 
         public Result OnShutdown(UIControlledApplication application)
         {
+            FloorPatternOverlayServer.Unregister();
             return Result.Succeeded;
         }
     }

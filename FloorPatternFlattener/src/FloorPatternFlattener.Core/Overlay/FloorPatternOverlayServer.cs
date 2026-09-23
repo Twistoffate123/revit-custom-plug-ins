@@ -19,6 +19,7 @@ namespace FloorPatternFlattener.Overlay
             new Guid("A7C3E912-4B8F-4D21-9E6A-1F0C8D47B2E5");
 
         private static FloorPatternOverlayServer _instance;
+        private static HatchCache _cache;
 
         public static FloorPatternOverlayServer Instance =>
             _instance ?? (_instance = new FloorPatternOverlayServer());
@@ -94,12 +95,26 @@ namespace FloorPatternFlattener.Overlay
             var ids = FlattenSession.GetFloors(doc);
             if (ids.Count == 0) return;
 
+            var cache = GetOrBuildCache(doc, ids);
+            if (cache == null || cache.Segments.Count == 0) return;
+
+            SubmitLineList(cache);
+        }
+
+        private static HatchCache GetOrBuildCache(Document doc, IReadOnlyCollection<ElementId> ids)
+        {
+            var gen = FlattenSession.Generation;
+            if (_cache != null && _cache.Matches(doc, gen, ids))
+                return _cache;
+
+            _cache?.DisposeBuffers();
+
             var allSegments = new List<(XYZ A, XYZ B)>();
             Color lineColor = new Color(80, 80, 80);
 
             foreach (var id in ids)
             {
-                if (DrawContext.IsInterrupted()) return;
+                if (DrawContext.IsInterrupted()) return _cache;
                 var floor = doc.GetElement(id) as Floor;
                 if (floor == null) continue;
 
@@ -109,59 +124,26 @@ namespace FloorPatternFlattener.Overlay
                 allSegments.AddRange(hatch.Segments);
             }
 
-            if (allSegments.Count == 0) return;
-
-            SubmitLineList(allSegments, lineColor);
+            _cache = new HatchCache(doc.GetHashCode(), gen, ids, allSegments, lineColor);
+            return _cache;
         }
 
-        private static void SubmitLineList(IList<(XYZ A, XYZ B)> segments, Color color)
+        private static void SubmitLineList(HatchCache cache)
         {
+            var segments = cache.Segments;
             var vertexCount = segments.Count * 2;
             if (vertexCount < 2) return;
 
-            var vertexFloats = VertexPosition.GetSizeInFloats() * vertexCount;
-            var vertexBuffer = new VertexBuffer(vertexFloats);
-            vertexBuffer.Map(vertexFloats);
-            var vstream = vertexBuffer.GetVertexStreamPosition();
-            foreach (var (a, b) in segments)
-            {
-                vstream.AddVertex(new VertexPosition(a));
-                vstream.AddVertex(new VertexPosition(b));
-            }
-            vertexBuffer.Unmap();
-
-            var indexCount = segments.Count * 2;
-            var indexBuffer = new IndexBuffer(indexCount);
-            indexBuffer.Map(indexCount);
-            var istream = indexBuffer.GetIndexStreamLine();
-            for (var i = 0; i < segments.Count; i++)
-            {
-                istream.AddLine(new IndexLine(i * 2, i * 2 + 1));
-            }
-            indexBuffer.Unmap();
-
-            var formatBits = VertexFormatBits.Position;
-            var vertexFormat = new VertexFormat(formatBits);
-            var effect = new EffectInstance(formatBits);
-
-            try
-            {
-                var tEff = effect.GetType();
-                var m = tEff.GetMethod("SetColor", new[] { typeof(Color) })
-                        ?? tEff.GetMethod("SetDiffuseColor", new[] { typeof(Color) });
-                m?.Invoke(effect, new object[] { color });
-            }
-            catch
-            {
-            }
+            if (!cache.EnsureBuffers())
+                return;
 
             DrawContext.FlushBuffer(
-                vertexBuffer,
+                cache.VertexBuffer,
                 vertexCount,
-                indexBuffer,
-                indexCount,
-                vertexFormat,
-                effect,
+                cache.IndexBuffer,
+                cache.IndexCount,
+                cache.VertexFormat,
+                cache.Effect,
                 PrimitiveType.LineList,
                 0,
                 segments.Count);
@@ -175,9 +157,7 @@ namespace FloorPatternFlattener.Overlay
 
             var server = Instance;
             if (!service.IsRegisteredServerId(server.GetServerId()))
-            {
                 service.AddServer(server);
-            }
 
             var active = new List<Guid>(service.GetActiveServerIds());
             if (!active.Contains(server.GetServerId()))
@@ -187,12 +167,39 @@ namespace FloorPatternFlattener.Overlay
             }
         }
 
+        public static void Unregister()
+        {
+            try
+            {
+                var service = ExternalServiceRegistry.GetService(
+                    ExternalServices.BuiltInExternalServices.DirectContext3DService) as MultiServerService;
+                if (service == null) return;
+
+                var active = new List<Guid>(service.GetActiveServerIds());
+                if (active.Remove(ServerIdValue))
+                    service.SetActiveServers(active);
+
+                if (service.IsRegisteredServerId(ServerIdValue))
+                    service.RemoveServer(ServerIdValue);
+            }
+            catch
+            {
+                // Revit may already have torn the service down.
+            }
+
+            InvalidateCache();
+        }
+
         public static void EnsureRegistered()
         {
             try { Register(); }
-            catch
-            {
-            }
+            catch { /* first command retries */ }
+        }
+
+        public static void InvalidateCache()
+        {
+            _cache?.DisposeBuffers();
+            _cache = null;
         }
 
         public static void RefreshViews(Document doc, UIDocument uidoc = null)
@@ -200,14 +207,100 @@ namespace FloorPatternFlattener.Overlay
             if (doc == null) return;
             try
             {
-                var view = uidoc?.ActiveView ?? doc.ActiveView;
-                if (view != null)
-                {
-                    uidoc?.RefreshActiveView();
-                }
+                uidoc?.RefreshActiveView();
             }
             catch
             {
+            }
+        }
+
+        private sealed class HatchCache
+        {
+            public int DocKey { get; }
+            public int Generation { get; }
+            public HashSet<ElementId> Ids { get; }
+            public List<(XYZ A, XYZ B)> Segments { get; }
+            public Color Color { get; }
+            public VertexBuffer VertexBuffer { get; private set; }
+            public IndexBuffer IndexBuffer { get; private set; }
+            public VertexFormat VertexFormat { get; private set; }
+            public EffectInstance Effect { get; private set; }
+            public int IndexCount { get; private set; }
+
+            public HatchCache(
+                int docKey,
+                int generation,
+                IEnumerable<ElementId> ids,
+                List<(XYZ A, XYZ B)> segments,
+                Color color)
+            {
+                DocKey = docKey;
+                Generation = generation;
+                Ids = new HashSet<ElementId>(ids);
+                Segments = segments ?? new List<(XYZ A, XYZ B)>();
+                Color = color ?? new Color(80, 80, 80);
+            }
+
+            public bool Matches(Document doc, int generation, IReadOnlyCollection<ElementId> ids)
+            {
+                if (doc == null || generation != Generation || doc.GetHashCode() != DocKey)
+                    return false;
+                if (ids.Count != Ids.Count) return false;
+                foreach (var id in ids)
+                {
+                    if (!Ids.Contains(id)) return false;
+                }
+                return VertexBuffer != null;
+            }
+
+            public bool EnsureBuffers()
+            {
+                if (VertexBuffer != null) return true;
+                if (Segments.Count == 0) return false;
+
+                var vertexCount = Segments.Count * 2;
+                var vertexFloats = VertexPosition.GetSizeInFloats() * vertexCount;
+                var vertexBuffer = new VertexBuffer(vertexFloats);
+                vertexBuffer.Map(vertexFloats);
+                var vstream = vertexBuffer.GetVertexStreamPosition();
+                foreach (var (a, b) in Segments)
+                {
+                    vstream.AddVertex(new VertexPosition(a));
+                    vstream.AddVertex(new VertexPosition(b));
+                }
+                vertexBuffer.Unmap();
+
+                var indexCount = Segments.Count * 2;
+                var indexBuffer = new IndexBuffer(indexCount);
+                indexBuffer.Map(indexCount);
+                var istream = indexBuffer.GetIndexStreamLine();
+                for (var i = 0; i < Segments.Count; i++)
+                    istream.AddLine(new IndexLine(i * 2, i * 2 + 1));
+                indexBuffer.Unmap();
+
+                var formatBits = VertexFormatBits.Position;
+                var vertexFormat = new VertexFormat(formatBits);
+                var effect = new EffectInstance(formatBits);
+                effect.SetColor(Color);
+
+                VertexBuffer = vertexBuffer;
+                IndexBuffer = indexBuffer;
+                VertexFormat = vertexFormat;
+                Effect = effect;
+                IndexCount = indexCount;
+                return true;
+            }
+
+            public void DisposeBuffers()
+            {
+                VertexBuffer?.Dispose();
+                IndexBuffer?.Dispose();
+                VertexFormat?.Dispose();
+                Effect?.Dispose();
+                VertexBuffer = null;
+                IndexBuffer = null;
+                VertexFormat = null;
+                Effect = null;
             }
         }
     }

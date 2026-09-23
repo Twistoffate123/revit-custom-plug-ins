@@ -7,12 +7,22 @@ namespace FloorPatternFlattener.Session
     /// <summary>
     /// Per-document store of Floor ElementIds that should receive a flat hatch overlay.
     /// Keyed by document hash so multiple open documents remain independent.
+    /// In-memory only — not saved with the RVT.
     /// </summary>
     public static class FlattenSession
     {
         private static readonly object Gate = new object();
         private static readonly Dictionary<int, HashSet<ElementId>> Store =
             new Dictionary<int, HashSet<ElementId>>();
+        private static int _generation;
+
+        /// <summary>
+        /// Bumps whenever the floor set changes so overlay caches can invalidate.
+        /// </summary>
+        public static int Generation
+        {
+            get { lock (Gate) return _generation; }
+        }
 
         public static int DocumentKey(Document doc)
         {
@@ -34,11 +44,15 @@ namespace FloorPatternFlattener.Session
                     Store[key] = set;
                 }
 
+                var changed = false;
                 foreach (var id in floorIds)
                 {
-                    if (id != null && id != ElementId.InvalidElementId)
-                        set.Add(id);
+                    if (id != null && id != ElementId.InvalidElementId && set.Add(id))
+                        changed = true;
                 }
+
+                if (changed)
+                    _generation++;
             }
         }
 
@@ -49,10 +63,16 @@ namespace FloorPatternFlattener.Session
             lock (Gate)
             {
                 if (!Store.TryGetValue(key, out var set)) return;
+                var changed = false;
                 foreach (var id in floorIds)
-                    set.Remove(id);
+                {
+                    if (set.Remove(id))
+                        changed = true;
+                }
                 if (set.Count == 0)
                     Store.Remove(key);
+                if (changed)
+                    _generation++;
             }
         }
 
@@ -61,7 +81,8 @@ namespace FloorPatternFlattener.Session
             if (doc == null) return;
             lock (Gate)
             {
-                Store.Remove(DocumentKey(doc));
+                if (Store.Remove(DocumentKey(doc)))
+                    _generation++;
             }
         }
 
@@ -98,10 +119,14 @@ namespace FloorPatternFlattener.Session
                     if (doc.GetElement(id) == null)
                         dead.Add(id);
                 }
+
+                if (dead.Count == 0) return;
+
                 foreach (var id in dead)
                     set.Remove(id);
                 if (set.Count == 0)
                     Store.Remove(key);
+                _generation++;
             }
         }
     }
