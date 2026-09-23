@@ -58,7 +58,6 @@ namespace FloorPatternFlattener.Commands
             }
             catch (Exception ex)
             {
-                // Non-fatal: overlay still works with native pattern visible.
                 TaskDialog.Show("Floor Pattern Flattener",
                     "Overlay registered, but native pattern hide failed:\n" + ex.Message);
             }
@@ -84,7 +83,6 @@ namespace FloorPatternFlattener.Commands
             if (selected.Count > 0)
                 return selected;
 
-            // Prompt
             var refs = uidoc.Selection.PickObjects(
                 ObjectType.Element,
                 new FloorSelectionFilter(),

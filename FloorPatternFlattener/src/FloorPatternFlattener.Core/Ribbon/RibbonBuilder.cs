@@ -16,8 +16,6 @@ namespace FloorPatternFlattener.Ribbon
                 ? PreferredTabName
                 : FallbackTabName;
 
-            // Ensure preferred tab if Create succeeded earlier or already existed;
-            // if preferred failed entirely, panel goes on Add-Ins.
             if (tabName == PreferredTabName)
                 EnsureTab(app, PreferredTabName);
 
@@ -73,7 +71,6 @@ namespace FloorPatternFlattener.Ribbon
             }
             catch
             {
-                // Already exists — treat as success for preferred tab.
                 try
                 {
                     app.GetRibbonPanels(tabName);

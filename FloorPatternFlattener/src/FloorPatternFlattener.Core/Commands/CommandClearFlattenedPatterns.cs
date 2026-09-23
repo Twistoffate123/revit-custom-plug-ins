@@ -31,7 +31,6 @@ namespace FloorPatternFlattener.Commands
                 return Result.Succeeded;
             }
 
-            // If selection contains floors that are flattened, clear only those; else clear all for the document.
             var selectedFloorIds = uidoc.Selection.GetElementIds()
                 .Where(id => doc.GetElement(id) is Floor)
                 .ToList();
@@ -58,7 +57,6 @@ namespace FloorPatternFlattener.Commands
             }
             catch
             {
-                // non-fatal
             }
 
             if (snapshot.Count == existing.Count)
