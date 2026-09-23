@@ -71,7 +71,7 @@ namespace FloorPatternFlattener.Overlay
             }
             catch
             {
-                if (startedHere && tx != null && tx.HasStarted())
+                if (startedHere && tx != null && tx.GetStatus() == TransactionStatus.Started)
                     tx.RollBack();
                 throw;
             }
@@ -86,7 +86,8 @@ namespace FloorPatternFlattener.Overlay
         {
             var list = new FilteredElementCollector(doc)
                 .OfClass(typeof(View3D))
-                .Cast<View3D>()n                .Where(v => v != null && !v.IsTemplate)
+                .Cast<View3D>()
+                .Where(v => v != null && !v.IsTemplate)
                 .Cast<View>()
                 .ToList();
 
