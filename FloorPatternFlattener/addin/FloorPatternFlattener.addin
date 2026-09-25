@@ -7,6 +7,9 @@
 
   Manual install: set Assembly to the full path of FloorPatternFlattener.dll
   built for the matching Revit year, then place under the Addins\20XX folder.
+
+  VendorId "FPF" is also the vendor id of the add-in's extensible storage schemas
+  and of its (optional) Dynamic Model Update updater. Do not change it.
 -->
 <RevitAddIns>
   <AddIn Type="Application">

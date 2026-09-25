@@ -5,6 +5,10 @@
     or pass /p:Revit2024Path="C:\Program Files\Autodesk\Revit 2024" on the command line.
     Defaults match a standard Autodesk Windows install.
   -->
+  <!-- Optional local overrides (gitignored). Imported first so its values win over the defaults below. -->
+  <Import Project="$(MSBuildThisFileDirectory)Directory.Build.props.user"
+          Condition="Exists('$(MSBuildThisFileDirectory)Directory.Build.props.user')" />
+
   <PropertyGroup>
     <Revit2023Path Condition="'$(Revit2023Path)' == ''">C:\Program Files\Autodesk\Revit 2023</Revit2023Path>
     <Revit2024Path Condition="'$(Revit2024Path)' == ''">C:\Program Files\Autodesk\Revit 2024</Revit2024Path>
