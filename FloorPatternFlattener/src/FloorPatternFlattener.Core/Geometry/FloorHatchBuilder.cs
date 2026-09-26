@@ -1,156 +1,279 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using Autodesk.Revit.DB;
 
 namespace FloorPatternFlattener.Geometry
 {
     /// <summary>
-    /// Extracts a floor's plan outline and top elevation, then builds hatch line segments
-    /// lying on a horizontal plane (plan-flat overlay).
+    /// One upward-facing planar piece of a floor's top surface: its XY footprint (outer + holes) and plane.
+    /// Planar faces map 1:1 to a piece; non-planar faces are triangulated into one piece per triangle.
+    /// </summary>
+    public sealed class TopPiece
+    {
+        public RegionXY Region { get; } = new RegionXY();
+        public double Ox, Oy, Oz;   // point on plane
+        public double Nx, Ny, Nz;   // unit normal, Nz > 0
+        public PatternSource Pattern { get; set; }
+        public bool FromTriangulation { get; set; }
+
+        /// <summary>Z of the plane at (x, y): vertical projection onto the face plane.</summary>
+        public double ZAt(double x, double y) => Oz - (Nx * (x - Ox) + Ny * (y - Oy)) / Nz;
+    }
+
+    /// <summary>Everything the hatch depends on, plus a signature (hash) of it.</summary>
+    public sealed class FloorHatchInput
+    {
+        public List<TopPiece> Pieces { get; } = new List<TopPiece>();
+        public string Signature { get; set; } = string.Empty;
+
+        /// <summary>UniqueIds of materials / fill patterns used (for cheap updater filtering).</summary>
+        public List<string> DependencyUniqueIds { get; } = new List<string>();
+
+        public int NonPlanarFaces { get; set; }
+        public bool UsedDefaultGrid { get; set; }
+        public bool UsedDraftingPattern { get; set; }
+        public List<string> PatternDescriptions { get; } = new List<string>();
+    }
+
+    public sealed class Segment3
+    {
+        public XYZ A;
+        public XYZ B;
+    }
+
+    public sealed class FloorHatchResult
+    {
+        public List<Segment3> Segments { get; } = new List<Segment3>();
+        public bool Truncated { get; set; }
+        public int SkippedGrids { get; set; }
+        public int SkippedShort { get; set; }
+    }
+
+    /// <summary>
+    /// Builds the flat-pattern hatch for a floor:
+    ///  1. find all upward-facing top faces (normal.Z &gt; tolerance), incl. every slope of a multi-slope floor;
+    ///  2. project each face's edge loops (outer + openings) to XY;
+    ///  3. generate the true fill-pattern lines in PLAN, aligned to the project internal origin;
+    ///  4. clip them per face (even-odd), apply dashes;
+    ///  5. lift the endpoints vertically onto the face plane and offset along the face normal.
+    /// A straight line projected vertically onto a plane stays straight, so the result reads as a plan pattern
+    /// while lying exactly on the slope.
     /// </summary>
     public static class FloorHatchBuilder
     {
-        public sealed class HatchResult
+        // ---------------------------------------------------------------- input
+
+        public static FloorHatchInput ReadInput(Floor floor, PatternReader patterns)
         {
-            public List<(XYZ A, XYZ B)> Segments { get; } = new List<(XYZ A, XYZ B)>();
-            public double Elevation { get; set; }
-            public Color Color { get; set; } = new Color(80, 80, 80);
-            public double SpacingFeet { get; set; }
-        }
+            if (floor == null) throw new ArgumentNullException(nameof(floor));
+            var doc = floor.Document;
+            var input = new FloorHatchInput();
+            var fallbackMaterial = GetTypeTopMaterial(floor);
 
-        public static HatchResult Build(Floor floor, Document doc)
-        {
-            var result = new HatchResult();
-            if (floor == null || doc == null) return result;
-
-            if (!TryGetTopOutline(floor, out var outlineXy, out var elevation))
-                return result;
-
-            result.Elevation = elevation;
-
-            var patternInfo = TryReadSurfacePattern(floor, doc);
-            result.SpacingFeet = patternInfo.SpacingFeet;
-            result.Color = patternInfo.Color;
-            var angle0 = patternInfo.AngleRadians;
-            var angle1 = angle0 + Math.PI / 2.0;
-
-            PolygonClipper.GetBounds(outlineXy, out var minX, out var minY, out _, out _);
-            var originX = minX;
-            var originY = minY;
-
-            var lines0 = PolygonClipper.ClipParallelLines(outlineXy, result.SpacingFeet, angle0, originX, originY);
-            var lines1 = PolygonClipper.ClipParallelLines(outlineXy, result.SpacingFeet, angle1, originX, originY);
-
-            foreach (var (a, b) in lines0.Concat(lines1))
+            var options = new Options
             {
-                var aa = new XYZ(a.X, a.Y, elevation);
-                var bb = new XYZ(b.X, b.Y, elevation);
-                if (aa.DistanceTo(bb) > 1.0e-6)
-                    result.Segments.Add((aa, bb));
-            }
-
-            return result;
-        }
-
-        private struct PatternInfo
-        {
-            public double SpacingFeet;
-            public double AngleRadians;
-            public Color Color;
-        }
-
-        private static PatternInfo TryReadSurfacePattern(Floor floor, Document doc)
-        {
-            // Default: ~300 mm grid. Revit internal units are feet.
-            const double defaultMm = 300.0;
-            var defaultFeet = UnitUtils.ConvertToInternalUnits(defaultMm, UnitTypeId.Millimeters);
-            // Fallback if UnitTypeId unavailable in very old APIs — still fine for 2023+.
-            if (defaultFeet <= 0)
-                defaultFeet = 300.0 / 304.8;
-
-            var info = new PatternInfo
-            {
-                SpacingFeet = defaultFeet,
-                AngleRadians = 0.0,
-                Color = new Color(80, 80, 80)
+                ComputeReferences = false,
+                IncludeNonVisibleObjects = false,
+                DetailLevel = ViewDetailLevel.Fine
             };
 
-            try
+            GeometryElement geom = null;
+            try { geom = floor.get_Geometry(options); } catch { geom = null; }
+
+            if (geom != null)
             {
-                var matId = GetTopFaceMaterialId(floor);
-                if (matId == null || matId == ElementId.InvalidElementId)
-                    return info;
-
-                var material = doc.GetElement(matId) as Material;
-                if (material == null) return info;
-
-                // Prefer foreground surface pattern (model pattern for floors).
-                var fpId = material.SurfaceForegroundPatternId;
-                if (fpId == null || fpId == ElementId.InvalidElementId)
-                    fpId = material.SurfaceBackgroundPatternId;
-
-                var fp = doc.GetElement(fpId) as FillPatternElement;
-                if (fp != null)
+                foreach (var obj in geom)
                 {
-                    var pattern = fp.GetFillPattern();
-                    if (pattern != null && !pattern.IsSolidFill)
+                    if (obj is Solid s)
+                        ReadSolid(doc, floor, s, fallbackMaterial, patterns, input);
+                    else if (obj is GeometryInstance gi)
                     {
-                        // Use first fill grid length/angle when available.
-                        try
+                        var ig = gi.GetInstanceGeometry();
+                        if (ig == null) continue;
+                        foreach (var o2 in ig)
+                            if (o2 is Solid s2)
+                                ReadSolid(doc, floor, s2, fallbackMaterial, patterns, input);
+                    }
+                }
+            }
+
+            input.Signature = ComputeSignature(floor, input);
+            return input;
+        }
+
+        private static void ReadSolid(Document doc, Floor floor, Solid solid, ElementId fallbackMaterial,
+            PatternReader patterns, FloorHatchInput input)
+        {
+            if (solid == null || solid.Faces == null || solid.Faces.Size == 0) return;
+            if (solid.Volume <= 0) return;
+
+            foreach (Face face in solid.Faces)
+            {
+                try
+                {
+                    if (face is PlanarFace pf)
+                    {
+                        var n = pf.FaceNormal;
+                        if (n.Z <= FpfOptions.MinUpwardNormalZ) continue;
+
+                        var piece = new TopPiece
                         {
-                            var grids = pattern.GetFillGrids();
-                            if (grids != null && grids.Count > 0)
+                            Ox = pf.Origin.X, Oy = pf.Origin.Y, Oz = pf.Origin.Z,
+                            Nx = n.X, Ny = n.Y, Nz = n.Z
+                        };
+                        AddFaceEdges(face, piece.Region);
+                        if (piece.Region.IsEmpty) continue;
+                        piece.Pattern = ResolvePattern(doc, floor, face, fallbackMaterial, patterns, input);
+                        input.Pieces.Add(piece);
+                    }
+                    else
+                    {
+                        // Non-planar: best effort. If the face is upward-facing at its centre, triangulate it and
+                        // treat every upward triangle as a small planar piece (lines are split at triangle edges
+                        // but stay continuous because neighbouring triangles share edges).
+                        var bb = face.GetBoundingBox();
+                        var mid = new UV((bb.Min.U + bb.Max.U) * 0.5, (bb.Min.V + bb.Max.V) * 0.5);
+                        var cn = face.ComputeNormal(mid);
+                        if (cn == null || cn.Z <= FpfOptions.MinUpwardNormalZ) continue;
+
+                        var mesh = face.Triangulate();
+                        if (mesh == null || mesh.NumTriangles == 0) continue;
+
+                        input.NonPlanarFaces++;
+                        var pattern = ResolvePattern(doc, floor, face, fallbackMaterial, patterns, input);
+                        for (var i = 0; i < mesh.NumTriangles; i++)
+                        {
+                            var tri = mesh.get_Triangle(i);
+                            var a = tri.get_Vertex(0);
+                            var b = tri.get_Vertex(1);
+                            var c = tri.get_Vertex(2);
+                            var nrm = (b - a).CrossProduct(c - a);
+                            if (nrm.GetLength() < 1.0e-12) continue;
+                            nrm = nrm.Normalize();
+                            if (nrm.Z < 0) nrm = nrm.Negate();
+                            if (nrm.Z <= FpfOptions.MinUpwardNormalZ) continue;
+
+                            var piece = new TopPiece
                             {
-                                var grid = grids[0];
-                                // Offset is the distance between parallel hatch lines.
-                                var spacing = Math.Abs(grid.Offset);
-                                if (spacing > 1.0e-9)
-                                    info.SpacingFeet = spacing;
-                                info.AngleRadians = grid.Angle;
-                            }
-                        }
-                        catch
-                        {
-                            // Some patterns expose grids differently; keep defaults.
+                                Ox = a.X, Oy = a.Y, Oz = a.Z,
+                                Nx = nrm.X, Ny = nrm.Y, Nz = nrm.Z,
+                                Pattern = pattern,
+                                FromTriangulation = true
+                            };
+                            piece.Region.AddEdge(a.X, a.Y, b.X, b.Y);
+                            piece.Region.AddEdge(b.X, b.Y, c.X, c.Y);
+                            piece.Region.AddEdge(c.X, c.Y, a.X, a.Y);
+                            if (!piece.Region.IsEmpty) input.Pieces.Add(piece);
                         }
                     }
                 }
-
-                try
-                {
-                    var c = material.SurfaceForegroundPatternColor;
-                    if (c != null)
-                        info.Color = c;
-                }
                 catch
                 {
-                    // ignore
+                    // A single bad face must not abort the whole floor.
+                }
+            }
+        }
+
+        /// <summary>All edge loops (outer + inner) of a face, tessellated, projected to XY.</summary>
+        private static void AddFaceEdges(Face face, RegionXY region)
+        {
+            foreach (EdgeArray loop in face.EdgeLoops)
+            {
+                foreach (Edge edge in loop)
+                {
+                    var pts = edge.Tessellate();
+                    if (pts == null) continue;
+                    for (var i = 0; i + 1 < pts.Count; i++)
+                        region.AddEdge(pts[i].X, pts[i].Y, pts[i + 1].X, pts[i + 1].Y);
+                }
+            }
+        }
+
+        private static PatternSource ResolvePattern(Document doc, Floor floor, Face face, ElementId fallbackMaterial,
+            PatternReader patterns, FloorHatchInput input)
+        {
+            var matId = GetFaceMaterial(doc, floor, face, fallbackMaterial);
+            var src = patterns.ForMaterial(matId);
+            if (src.IsDefaultGrid) input.UsedDefaultGrid = true;
+            if (src.IsDraftingScaled) input.UsedDraftingPattern = true;
+            AddUnique(input.DependencyUniqueIds, src.MaterialUniqueId);
+            AddUnique(input.DependencyUniqueIds, src.PatternUniqueId);
+            AddUnique(input.PatternDescriptions, src.Description);
+            return src;
+        }
+
+        private static void AddUnique(List<string> list, string value)
+        {
+            if (!string.IsNullOrEmpty(value) && !list.Contains(value)) list.Add(value);
+        }
+
+        /// <summary>
+        /// Material shown on the face: painted material &gt; face material &gt; type's top layer &gt; Floors category.
+        /// </summary>
+        public static ElementId GetFaceMaterial(Document doc, Element floor, Face face, ElementId fallback)
+        {
+            try
+            {
+                if (doc.IsPainted(floor.Id, face))
+                {
+                    var painted = doc.GetPaintedMaterial(floor.Id, face);
+                    if (IsValid(painted)) return painted;
                 }
             }
             catch
             {
-                // Material/pattern APIs vary; defaults are fine.
+                // not paintable / not supported
             }
 
-            return info;
+            try
+            {
+                var m = face.MaterialElementId;
+                if (IsValid(m) && doc.GetElement(m) is Material) return m;
+            }
+            catch
+            {
+                // ignore
+            }
+
+            if (IsValid(fallback)) return fallback;
+
+            try
+            {
+                var catMat = floor.Category?.Material;
+                if (catMat != null) return catMat.Id;
+            }
+            catch
+            {
+                // ignore
+            }
+
+            return ElementId.InvalidElementId;
         }
 
-        private static ElementId GetTopFaceMaterialId(Floor floor)
+        /// <summary>
+        /// First layer from the top (layer 0 is the top/exterior side of a floor) down to the first core layer
+        /// that has a valid material. Variable-thickness layers do not change which layer is on top.
+        /// </summary>
+        public static ElementId GetTypeTopMaterial(Floor floor)
         {
             try
             {
-                // Compound structure outer layer material is a good proxy for finish.
                 var type = floor.Document.GetElement(floor.GetTypeId()) as HostObjAttributes;
                 var cs = type?.GetCompoundStructure();
-                if (cs != null)
+                if (cs == null) return ElementId.InvalidElementId;
+                var layers = cs.GetLayers();
+                if (layers == null || layers.Count == 0) return ElementId.InvalidElementId;
+
+                var lastIndex = cs.GetFirstCoreLayerIndex();
+                if (lastIndex < 0 || lastIndex >= layers.Count) lastIndex = layers.Count - 1;
+
+                for (var i = 0; i <= lastIndex; i++)
                 {
-                    var layers = cs.GetLayers();
-                    if (layers != null && layers.Count > 0)
-                    {
-                        // Layer 0 is typically the top/exterior finish for floors.
-                        return layers[0].MaterialId;
-                    }
+                    var id = layers[i].MaterialId;
+                    if (IsValid(id)) return id;
                 }
             }
             catch
@@ -161,182 +284,152 @@ namespace FloorPatternFlattener.Geometry
             return ElementId.InvalidElementId;
         }
 
-        public static bool TryGetTopOutline(Floor floor, out List<XYZ> outlineXy, out double elevation)
+        private static bool IsValid(ElementId id) => id != null && id != ElementId.InvalidElementId;
+
+        // ---------------------------------------------------------------- signature
+
+        private static string ComputeSignature(Floor floor, FloorHatchInput input)
         {
-            outlineXy = null;
-            elevation = 0;
+            var sb = new StringBuilder(4096);
+            sb.Append("A").Append(FpfOptions.AlgorithmVersion)
+              .Append("|O").Append(F(FpfOptions.SurfaceOffsetFeet))
+              .Append("|S").Append(F(FpfOptions.DraftingPatternScale))
+              .Append("|G").Append(F(FpfOptions.DefaultGridSpacingFeet))
+              .Append("|X").Append(FpfOptions.MaxSegmentsPerFloor).Append(',').Append(FpfOptions.SegmentsPerDirectShape);
 
-            var options = new Options
+            try
             {
-                ComputeReferences = false,
-                DetailLevel = ViewDetailLevel.Fine,
-                IncludeNonVisibleObjects = false
-            };
-
-            var geom = floor.get_Geometry(options);
-            if (geom == null) return false;
-
-            PlanarFace bestFace = null;
-            double bestZ = double.MinValue;
-            double bestArea = -1;
-
-            foreach (var obj in geom)
+                sb.Append("|PC").Append(floor.CreatedPhaseId).Append("|PD").Append(floor.DemolishedPhaseId);
+            }
+            catch
             {
-                Solid solid = obj as Solid;
-                if (solid == null && obj is GeometryInstance gi)
+                // ignore
+            }
+
+            try { sb.Append("|W").Append(floor.WorksetId.IntegerValue); } catch { /* ignore */ }
+
+            foreach (var p in input.Pieces)
+            {
+                sb.Append("\n").Append(p.FromTriangulation ? 'T' : 'P')
+                  .Append(F(p.Nx)).Append(',').Append(F(p.Ny)).Append(',').Append(F(p.Nz)).Append(',')
+                  .Append(F(p.Nx * p.Ox + p.Ny * p.Oy + p.Nz * p.Oz));
+                var e = p.Region.RawEdges;
+                for (var i = 0; i < e.Count; i++)
+                    sb.Append(i % 4 == 0 ? ';' : ',').Append(F(e[i]));
+                sb.Append("|").Append(p.Pattern?.SignatureText ?? "-");
+            }
+
+            using (var sha = SHA256.Create())
+            {
+                var bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(sb.ToString()));
+                var hex = new StringBuilder(bytes.Length * 2);
+                foreach (var b in bytes) hex.Append(b.ToString("x2", CultureInfo.InvariantCulture));
+                return hex.ToString();
+            }
+        }
+
+        private static string F(double v) => PatternReader.F(v);
+
+        // ---------------------------------------------------------------- build
+
+        public static FloorHatchResult Build(FloorHatchInput input, double shortCurveTolerance)
+        {
+            var result = new FloorHatchResult();
+            if (input == null) return result;
+
+            var minLen = Math.Max(shortCurveTolerance, 1.0e-6);
+            var dotLen = Math.Max(FpfOptions.DotLengthFeet, minLen * 1.5);
+            var intervals = new List<double[]>();
+            var dashed = new List<double[]>();
+
+            foreach (var piece in input.Pieces)
+            {
+                if (piece.Pattern == null) continue;
+                var r = piece.Region;
+                // lift offset along the face normal
+                var offX = piece.Nx * FpfOptions.SurfaceOffsetFeet;
+                var offY = piece.Ny * FpfOptions.SurfaceOffsetFeet;
+                var offZ = piece.Nz * FpfOptions.SurfaceOffsetFeet;
+
+                foreach (var g in piece.Pattern.Grids)
                 {
-                    var instGeom = gi.GetInstanceGeometry();
-                    if (instGeom == null) continue;
-                    foreach (var o2 in instGeom)
+                    var dx = Math.Cos(g.Angle);
+                    var dy = Math.Sin(g.Angle);
+                    var nx = -dy;
+                    var ny = dx;
+
+                    // Range of perpendicular distance covered by the region's bounding box.
+                    double smin = double.MaxValue, smax = double.MinValue;
+                    Span(r.MinX, r.MinY, g, nx, ny, ref smin, ref smax);
+                    Span(r.MaxX, r.MinY, g, nx, ny, ref smin, ref smax);
+                    Span(r.MaxX, r.MaxY, g, nx, ny, ref smin, ref smax);
+                    Span(r.MinX, r.MaxY, g, nx, ny, ref smin, ref smax);
+
+                    long kmin, kmax;
+                    if (g.Offset < 1.0e-9)
                     {
-                        solid = o2 as Solid;
-                        if (solid != null && solid.Faces != null && solid.Volume > 0)
-                            ConsiderSolid(solid, ref bestFace, ref bestZ, ref bestArea);
+                        if (smin > 0 || smax < 0) continue;
+                        kmin = kmax = 0;
                     }
-                    continue;
+                    else
+                    {
+                        kmin = (long)Math.Ceiling(smin / g.Offset);
+                        kmax = (long)Math.Floor(smax / g.Offset);
+                    }
+
+                    if (kmax - kmin + 1 > FpfOptions.MaxLinesPerGrid)
+                    {
+                        result.SkippedGrids++;
+                        continue;
+                    }
+
+                    for (var k = kmin; k <= kmax; k++)
+                    {
+                        var px = g.OriginX + k * (g.Shift * dx + g.Offset * nx);
+                        var py = g.OriginY + k * (g.Shift * dy + g.Offset * ny);
+
+                        intervals.Clear();
+                        intervals.AddRange(PolygonClipper.ClipLine(r, px, py, dx, dy));
+                        if (intervals.Count == 0) continue;
+
+                        dashed.Clear();
+                        PolygonClipper.ApplyDashes(intervals, g.Dashes, dotLen, dashed);
+
+                        foreach (var iv in dashed)
+                        {
+                            var ax = px + dx * iv[0];
+                            var ay = py + dy * iv[0];
+                            var bx = px + dx * iv[1];
+                            var by = py + dy * iv[1];
+                            var a = new XYZ(ax + offX, ay + offY, piece.ZAt(ax, ay) + offZ);
+                            var b = new XYZ(bx + offX, by + offY, piece.ZAt(bx, by) + offZ);
+                            if (a.DistanceTo(b) < minLen)
+                            {
+                                result.SkippedShort++;
+                                continue;
+                            }
+
+                            if (result.Segments.Count >= FpfOptions.MaxSegmentsPerFloor)
+                            {
+                                result.Truncated = true;
+                                return result;
+                            }
+
+                            result.Segments.Add(new Segment3 { A = a, B = b });
+                        }
+                    }
                 }
-
-                if (solid != null && solid.Faces != null && solid.Volume > 0)
-                    ConsiderSolid(solid, ref bestFace, ref bestZ, ref bestArea);
             }
 
-            if (bestFace == null)
-            {
-                // Fallback: bounding box top
-                var bb = floor.get_BoundingBox(null);
-                if (bb == null) return false;
-                elevation = bb.Max.Z;
-                outlineXy = new List<XYZ>
-                {
-                    new XYZ(bb.Min.X, bb.Min.Y, 0),
-                    new XYZ(bb.Max.X, bb.Min.Y, 0),
-                    new XYZ(bb.Max.X, bb.Max.Y, 0),
-                    new XYZ(bb.Min.X, bb.Max.Y, 0),
-                    new XYZ(bb.Min.X, bb.Min.Y, 0)
-                };
-                return true;
-            }
-
-            elevation = bestFace.Origin.Z;
-            // Prefer a horizontal face; for multi-slope use highest planar top face Z as plane.
-            if (!IsHorizontal(bestFace))
-            {
-                // Average Z of face edges as a compromise for gently sloped tops.
-                elevation = AverageEdgeZ(bestFace);
-            }
-
-            outlineXy = ExtractOuterLoopXy(bestFace);
-            if (outlineXy == null || outlineXy.Count < 3)
-            {
-                var bb = floor.get_BoundingBox(null);
-                if (bb == null) return false;
-                elevation = Math.Max(elevation, bb.Max.Z);
-                outlineXy = new List<XYZ>
-                {
-                    new XYZ(bb.Min.X, bb.Min.Y, 0),
-                    new XYZ(bb.Max.X, bb.Min.Y, 0),
-                    new XYZ(bb.Max.X, bb.Max.Y, 0),
-                    new XYZ(bb.Min.X, bb.Max.Y, 0),
-                    new XYZ(bb.Min.X, bb.Min.Y, 0)
-                };
-            }
-
-            return true;
+            return result;
         }
 
-        private static void ConsiderSolid(Solid solid, ref PlanarFace bestFace, ref double bestZ, ref double bestArea)
+        private static void Span(double x, double y, PatternGridDef g, double nx, double ny,
+            ref double smin, ref double smax)
         {
-            foreach (Face face in solid.Faces)
-            {
-                var pf = face as PlanarFace;
-                if (pf == null) continue;
-                var n = pf.FaceNormal;
-                // Upward-facing
-                if (n.Z <= 0.1) continue;
-                var z = pf.Origin.Z;
-                var area = pf.Area;
-                if (z > bestZ + 1.0e-6 || (Math.Abs(z - bestZ) < 1.0e-6 && area > bestArea))
-                {
-                    bestZ = z;
-                    bestArea = area;
-                    bestFace = pf;
-                }
-            }
-        }
-
-        private static bool IsHorizontal(PlanarFace face)
-        {
-            return Math.Abs(face.FaceNormal.Z) > 0.999;
-        }
-
-        private static double AverageEdgeZ(PlanarFace face)
-        {
-            double sum = 0;
-            int n = 0;
-            foreach (EdgeArray loop in face.EdgeLoops)
-            {
-                foreach (Edge e in loop)
-                {
-                    var curve = e.AsCurve();
-                    if (curve == null) continue;
-                    sum += curve.GetEndPoint(0).Z;
-                    sum += curve.GetEndPoint(1).Z;
-                    n += 2;
-                }
-            }
-            return n > 0 ? sum / n : face.Origin.Z;
-        }
-
-        private static List<XYZ> ExtractOuterLoopXy(PlanarFace face)
-        {
-            EdgeArray outer = null;
-            double bestLen = -1;
-            foreach (EdgeArray loop in face.EdgeLoops)
-            {
-                double len = 0;
-                foreach (Edge e in loop)
-                {
-                    try { len += e.ApproximateLength; }
-                    catch { /* ignore */ }
-                }
-                if (len > bestLen)
-                {
-                    bestLen = len;
-                    outer = loop;
-                }
-            }
-
-            if (outer == null) return null;
-
-            var pts = new List<XYZ>();
-            foreach (Edge e in outer)
-            {
-                var curve = e.AsCurve();
-                if (curve == null) continue;
-                // Tessellate for non-lines
-                IList<XYZ> tess;
-                try { tess = curve.Tessellate(); }
-                catch
-                {
-                    tess = new List<XYZ> { curve.GetEndPoint(0), curve.GetEndPoint(1) };
-                }
-
-                for (var i = 0; i < tess.Count; i++)
-                {
-                    var p = new XYZ(tess[i].X, tess[i].Y, 0);
-                    if (pts.Count == 0 || pts[pts.Count - 1].DistanceTo(p) > 1.0e-7)
-                        pts.Add(p);
-                }
-            }
-
-            if (pts.Count >= 3)
-            {
-                if (pts[0].DistanceTo(pts[pts.Count - 1]) > 1.0e-6)
-                    pts.Add(pts[0]);
-                return pts;
-            }
-
-            return null;
+            var s = (x - g.OriginX) * nx + (y - g.OriginY) * ny;
+            if (s < smin) smin = s;
+            if (s > smax) smax = s;
         }
     }
 }

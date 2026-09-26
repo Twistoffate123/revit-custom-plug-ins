@@ -12,12 +12,7 @@ namespace FloorPatternFlattener.Ribbon
 
         public static void Build(UIControlledApplication app)
         {
-            var tabName = TryCreateTab(app, PreferredTabName)
-                ? PreferredTabName
-                : FallbackTabName;
-
-            if (tabName == PreferredTabName)
-                EnsureTab(app, PreferredTabName);
+            var tabName = TryCreateTab(app, PreferredTabName) ? PreferredTabName : FallbackTabName;
 
             RibbonPanel panel;
             try
@@ -42,11 +37,14 @@ namespace FloorPatternFlattener.Ribbon
                 asm,
                 "FloorPatternFlattener.Commands.CommandFlattenFloorPatterns")
             {
-                ToolTip = "Draw plan-flat hatch overlays for selected floors in 3D views (DirectContext3D).",
+                ToolTip = "Replace the native surface pattern of the selected floors with a permanent, plan-true " +
+                          "flat pattern (real model lines) that follows the slope.",
                 LongDescription =
-                    "Registers selected Floor elements so their finish hatch is drawn on a horizontal plane " +
-                    "at the floor top elevation, clipped to the plan outline. Does not create Floor elements " +
-                    "or filled regions."
+                    "Generates the material's fill pattern in plan (aligned to the project internal origin), projects it " +
+                    "vertically onto every top face of the floor and stores it as a pinned Generic Model DirectShape " +
+                    "(Comments = \"" + FpfOptions.CommentsTag + "\"). The native surface pattern is hidden per view. " +
+                    "The flat pattern is saved with the model and regenerates automatically when the floor, its type, " +
+                    "material or fill pattern changes."
             });
 
             panel.AddItem(new PushButtonData(
@@ -55,10 +53,25 @@ namespace FloorPatternFlattener.Ribbon
                 asm,
                 "FloorPatternFlattener.Commands.CommandClearFlattenedPatterns")
             {
-                ToolTip = "Remove plan-flat hatch overlays for floors in this document.",
+                ToolTip = "Remove flat patterns from the selected flattened floors (or all floors in the document " +
+                          "if none are selected) and show the native surface pattern again.",
                 LongDescription =
-                    "Clears the session store for the active document (or for selected flattened floors) " +
-                    "and restores native surface pattern visibility overrides when possible."
+                    "Deletes the generated DirectShapes, removes the add-in data from the floors and turns the native " +
+                    "surface pattern visibility back on. Other view overrides are left untouched. Use this before " +
+                    "uninstalling the add-in."
+            });
+
+            panel.AddItem(new PushButtonData(
+                "FPF_RefreshFlattenedPatterns",
+                "Refresh Flattened\nPatterns",
+                asm,
+                "FloorPatternFlattener.Commands.CommandRefreshFlattenedPatterns")
+            {
+                ToolTip = "Force-regenerate the flat patterns of all flattened floors in this document.",
+                LongDescription =
+                    "Useful after the model was edited without the add-in, after an add-in upgrade, or when some " +
+                    "elements were skipped because they were not editable (worksharing). Also re-applies view overrides " +
+                    "and removes orphaned flat-pattern shapes."
             });
         }
 
@@ -81,12 +94,6 @@ namespace FloorPatternFlattener.Ribbon
                     return false;
                 }
             }
-        }
-
-        private static void EnsureTab(UIControlledApplication app, string tabName)
-        {
-            try { app.CreateRibbonTab(tabName); }
-            catch { /* exists */ }
         }
 
         private static RibbonPanel GetOrCreatePanel(UIControlledApplication app, string tabName, string panelName)

@@ -5,11 +5,11 @@ using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
 using Autodesk.Revit.UI.Selection;
-using FloorPatternFlattener.Overlay;
-using FloorPatternFlattener.Session;
+using FloorPatternFlattener.Services;
 
 namespace FloorPatternFlattener.Commands
 {
+    /// <summary>Flattens the selected floors (or picked floors): creates / refreshes their flat-pattern DirectShapes.</summary>
     [Transaction(TransactionMode.Manual)]
     [Regeneration(RegenerationOption.Manual)]
     public class CommandFlattenFloorPatterns : IExternalCommand
@@ -18,93 +18,55 @@ namespace FloorPatternFlattener.Commands
         {
             try
             {
-                var uidoc = commandData.Application.ActiveUIDocument;
-                if (uidoc == null)
+                if (!CommandSupport.TryGetDocument(commandData, out var uidoc, out var doc))
+                    return Result.Cancelled;
+
+                var floors = CommandSupport.SelectedFloors(uidoc);
+                if (floors.Count == 0)
                 {
-                    TaskDialog.Show("Floor Pattern Flattener", "Open a model first.");
+                    try
+                    {
+                        var refs = uidoc.Selection.PickObjects(ObjectType.Element,
+                            new CommandSupport.FloorSelectionFilter(),
+                            "Select floors to flatten patterns (Finish when done)");
+                        floors = refs.Select(r => doc.GetElement(r.ElementId)).OfType<Floor>()
+                            .GroupBy(f => f.Id).Select(g => g.First()).ToList();
+                    }
+                    catch (Autodesk.Revit.Exceptions.OperationCanceledException)
+                    {
+                        return Result.Cancelled;
+                    }
+                }
+
+                if (floors.Count == 0)
+                {
+                    TaskDialog.Show(FpfOptions.ProductName, "No floors selected.");
                     return Result.Cancelled;
                 }
 
-                var doc = uidoc.Document;
-                if (doc.IsReadOnly)
+                var canEdit = CommandSupport.PrepareEditability(doc, floors);
+                var report = new FpfReport();
+
+                var ok = CommandSupport.RunTransaction(doc, "Flatten Floor Patterns", report, () =>
                 {
-                    TaskDialog.Show("Floor Pattern Flattener", "This document is read-only. Overlay graphics can still draw after Flatten, but native pattern hide will be skipped.");
-                }
+                    var svc = new FlatPatternService(doc, report, canEdit);
+                    foreach (var f in floors)
+                    {
+                        if (f.IsValidObject) svc.Apply(f, ApplyMode.IfChanged, true);
+                    }
+                });
 
-                FloorPatternOverlayServer.EnsureRegistered();
-
-                List<ElementId> floorIds;
-                try
-                {
-                    floorIds = CollectFloors(uidoc, doc);
-                }
-                catch (Autodesk.Revit.Exceptions.OperationCanceledException)
-                {
-                    return Result.Cancelled;
-                }
-
-                if (floorIds == null || floorIds.Count == 0)
-                {
-                    TaskDialog.Show("Floor Pattern Flattener",
-                        "No Floor elements selected.\n\nSelect one or more Floors, then run Flatten Floor Patterns again.");
-                    return Result.Cancelled;
-                }
-
-                FlattenSession.AddFloors(doc, floorIds);
-
-                try
-                {
-                    FloorPatternVisibility.HideNativeSurfacePatterns(doc, uidoc.ActiveView, floorIds);
-                }
-                catch (Exception ex)
-                {
-                    TaskDialog.Show("Floor Pattern Flattener",
-                        "Overlay is active, but hiding native surface patterns failed:\n" + ex.Message +
-                        "\n\nWorkshared elements owned by another user, or a detached model, can cause this.");
-                }
-
-                FloorPatternOverlayServer.InvalidateCache();
-                FloorPatternOverlayServer.RefreshViews(doc, uidoc);
-
-                TaskDialog.Show("Floor Pattern Flattener",
-                    $"Flattened hatch overlay active for {floorIds.Count} floor(s).\n\n" +
-                    "Open or refresh a 3D view to see plan-flat patterns. " +
-                    "Native surface patterns are hidden in non-template 3D views when the document is writable.\n\n" +
-                    "This overlay is session-only. It is not saved in the RVT. Re-run Flatten after reopen.");
-
-                return Result.Succeeded;
+                CommandSupport.Show(ok ? "Flatten Floor Patterns" : "Flatten Floor Patterns - failed", report,
+                    floors.Count + " floor(s) processed.\nThe flat pattern is saved with the model and updates " +
+                    "automatically. Style it with a view filter on Generic Models where Comments = \"" +
+                    FpfOptions.CommentsTag + "\".");
+                return ok ? Result.Succeeded : Result.Failed;
             }
             catch (Exception ex)
             {
                 message = ex.Message;
-                TaskDialog.Show("Floor Pattern Flattener", ex.Message);
                 return Result.Failed;
             }
-        }
-
-        private static List<ElementId> CollectFloors(UIDocument uidoc, Document doc)
-        {
-            var selected = uidoc.Selection.GetElementIds()
-                .Select(id => doc.GetElement(id))
-                .OfType<Floor>()
-                .Select(f => f.Id)
-                .ToList();
-
-            if (selected.Count > 0)
-                return selected;
-
-            var refs = uidoc.Selection.PickObjects(
-                ObjectType.Element,
-                new FloorSelectionFilter(),
-                "Select Floor elements to flatten patterns");
-
-            return refs.Select(r => r.ElementId).Distinct().ToList();
-        }
-
-        private sealed class FloorSelectionFilter : ISelectionFilter
-        {
-            public bool AllowElement(Element elem) => elem is Floor;
-            public bool AllowReference(Reference reference, XYZ position) => true;
         }
     }
 }

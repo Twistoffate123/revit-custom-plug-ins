@@ -55,13 +55,19 @@ $skipped = @()
 foreach ($year in $Years) {
     $tfm = $TfmMap[$year]
     if (-not $tfm) {
-        $skipped += "Year $year: unknown TFM"
+        $skipped += "Year ${year}: unknown TFM"
         continue
     }
 
-    $projOut = Join-Path $Root "src\FloorPatternFlattener.$year\bin\$Configuration\$tfm\FloorPatternFlattener.dll"
-    if (-not (Test-Path $projOut)) {
-        $skipped += "Year $year: DLL not found at $projOut (build the project first)"
+    # SDK projects put output under bin\x64\<cfg>\<tfm> when built with -p:Platform=x64, else bin\<cfg>\<tfm>.
+    $projDir = Join-Path $Root "src\FloorPatternFlattener.$year"
+    $candidates = @(
+        (Join-Path $projDir "bin\x64\$Configuration\$tfm\FloorPatternFlattener.dll"),
+        (Join-Path $projDir "bin\$Configuration\$tfm\FloorPatternFlattener.dll")
+    )
+    $projOut = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $projOut) {
+        $skipped += "Year ${year}: DLL not found at $($candidates -join ' or ') (build the project first)"
         continue
     }
 
