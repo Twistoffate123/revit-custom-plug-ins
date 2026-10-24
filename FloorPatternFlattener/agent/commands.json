@@ -1,0 +1,320 @@
+{
+  "protocol": 1,
+  "forbidden": [
+    {
+      "names": ["save", "save_as", "saveas"],
+      "message": "This helper never saves the model. Save it yourself in Revit when you are ready. Nothing was changed."
+    },
+    {
+      "names": ["sync", "sync_with_central", "synchronize", "synchronize_with_central", "synchronise", "synchronise_with_central"],
+      "message": "This helper never syncs with central. In Revit, use Collaborate and Synchronize with Central yourself when you are ready. Nothing was changed."
+    },
+    {
+      "names": ["reload", "reload_latest"],
+      "message": "This helper never reloads latest from central. Do that yourself in Revit if elements are out of date, then try again. Nothing was changed."
+    },
+    {
+      "names": ["relinquish", "relinquish_all"],
+      "message": "This helper never relinquishes elements. Do that yourself in Revit. Nothing was changed."
+    },
+    {
+      "names": ["close", "close_document", "close_model", "close_revit"],
+      "message": "This helper never closes the model or Revit. Close it yourself when you are finished. Nothing was changed."
+    },
+    {
+      "names": ["undo", "redo"],
+      "message": "This helper never undoes or redoes. Use Ctrl+Z or Ctrl+Y in Revit. Nothing was changed."
+    }
+  ],
+  "commands": [
+    {
+      "name": "ping",
+      "mcpName": "revit_ping",
+      "summary": "Check that the open Revit session is answering. Does not read or change the model.",
+      "mutates": false,
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_model_info",
+      "mcpName": "revit_get_model_info",
+      "summary": "Describe the model the user has open: title, whether it is workshared, whether it is an ACC/BIM 360 cloud model, the active view, the levels, and the current selection. Use this first so you know which model you are in.",
+      "mutates": false,
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "query_elements",
+      "mcpName": "revit_query_elements",
+      "summary": "Find elements in the open model by category, and optionally by level and a parameter value. Returns element ids you can pass to other commands. Categories look like Walls, Doors, Windows, Floors, Rooms, Grids, Levels, Ceilings, Columns, Furniture, Stairs, or an OST_ name such as OST_Walls. On a metric model (typical in Dubai) parameter numbers are shown in the model's units, usually millimetres.",
+      "mutates": false,
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "category": { "type": "string", "minLength": 1 },
+          "level": { "type": "string", "minLength": 1 },
+          "parameter": { "type": "string", "minLength": 1 },
+          "equals": { "type": ["string", "number", "boolean"] },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 500, "default": 100 }
+        },
+        "required": ["category"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "list_types",
+      "mcpName": "revit_list_types",
+      "summary": "List family types in the open model for a category, such as wall types or door types, so you can use the exact name when creating elements.",
+      "mutates": false,
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "category": { "type": "string", "minLength": 1 },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 500, "default": 100 }
+        },
+        "required": ["category"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_parameters",
+      "mcpName": "revit_get_parameters",
+      "summary": "Read parameter values on one element. Pass names to read only those parameters, or omit names to read the user-facing parameters. Lengths include both the value you see in Revit and the internal value.",
+      "mutates": false,
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "elementId": { "type": "integer", "minimum": 1 },
+          "names": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "maxItems": 50
+          }
+        },
+        "required": ["elementId"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "set_parameter",
+      "mcpName": "revit_set_parameter",
+      "summary": "Change one parameter on one element. Runs as a single Undo step named 'Agent: Set parameter'. By default this refuses type parameters (they would change every element of that type) and pinned elements. Lengths are in the model's units unless you set units to mm, m, or ft. A metric Dubai model is usually millimetres. Does not save or sync.",
+      "mutates": true,
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "elementId": { "type": "integer", "minimum": 1 },
+          "name": { "type": "string", "minLength": 1 },
+          "value": { "type": ["string", "number", "boolean"] },
+          "units": {
+            "type": "string",
+            "enum": ["project", "mm", "millimetres", "millimeters", "cm", "m", "metres", "meters", "ft", "feet", "in", "inches"],
+            "default": "project"
+          },
+          "allowTypeChange": { "type": "boolean", "default": false },
+          "unpin": { "type": "boolean", "default": false }
+        },
+        "required": ["elementId", "name", "value"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "select_elements",
+      "mcpName": "revit_select_elements",
+      "summary": "Select elements in the open Revit view and zoom to them so the user can see what you mean. Does not change the model.",
+      "mutates": false,
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "elementIds": {
+            "type": "array",
+            "items": { "type": "integer", "minimum": 1 },
+            "minItems": 1,
+            "maxItems": 200
+          },
+          "zoom": { "type": "boolean", "default": true }
+        },
+        "required": ["elementIds"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "create_wall",
+      "mcpName": "revit_create_wall",
+      "summary": "Create one straight wall. start and end are XY points, for example [0, 0] and [6000, 0]. Height is the unconnected height. On a metric model (typical in Dubai) numbers are millimetres unless units is mm, m, or ft. level is the level name, such as 'Level 1'. wallType is optional; list_types with category Walls shows the names. One Undo step named 'Agent: Create wall'. Does not save or sync.",
+      "mutates": true,
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "start": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 3 },
+          "end": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 3 },
+          "level": { "type": "string", "minLength": 1 },
+          "height": { "type": "number", "minimum": 0 },
+          "wallType": { "type": "string", "minLength": 1 },
+          "units": {
+            "type": "string",
+            "enum": ["project", "mm", "millimetres", "millimeters", "cm", "m", "metres", "meters", "ft", "feet", "in", "inches"],
+            "default": "project"
+          },
+          "structural": { "type": "boolean", "default": false }
+        },
+        "required": ["start", "end", "height"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "create_door",
+      "mcpName": "revit_create_door",
+      "summary": "Place one door on an existing wall. wallId comes from query_elements. location is an XY point on the wall; omit it to use the middle of the wall. doorType is optional; list_types with category Doors shows the names. The door may need its hand or flip adjusted in Revit afterwards. One Undo step named 'Agent: Create door'. Does not save or sync.",
+      "mutates": true,
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "wallId": { "type": "integer", "minimum": 1 },
+          "location": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 3 },
+          "doorType": { "type": "string", "minLength": 1 },
+          "level": { "type": "string", "minLength": 1 },
+          "units": {
+            "type": "string",
+            "enum": ["project", "mm", "millimetres", "millimeters", "cm", "m", "metres", "meters", "ft", "feet", "in", "inches"],
+            "default": "project"
+          }
+        },
+        "required": ["wallId"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "create_level",
+      "mcpName": "revit_create_level",
+      "summary": "Create one level at an elevation. name must be new. Elevation is in the model's units unless units is set (millimetres on a typical Dubai model). One Undo step named 'Agent: Create level'. Does not save or sync.",
+      "mutates": true,
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "elevation": { "type": "number" },
+          "units": {
+            "type": "string",
+            "enum": ["project", "mm", "millimetres", "millimeters", "cm", "m", "metres", "meters", "ft", "feet", "in", "inches"],
+            "default": "project"
+          }
+        },
+        "required": ["name", "elevation"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "create_grid",
+      "mcpName": "revit_create_grid",
+      "summary": "Create one straight grid. start and end are XY points. name is optional; Revit will name it if you omit it, but the name must not already exist when you pass one. One Undo step named 'Agent: Create grid'. Does not save or sync.",
+      "mutates": true,
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "start": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 3 },
+          "end": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 3 },
+          "units": {
+            "type": "string",
+            "enum": ["project", "mm", "millimetres", "millimeters", "cm", "m", "metres", "meters", "ft", "feet", "in", "inches"],
+            "default": "project"
+          }
+        },
+        "required": ["start", "end"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "create_room",
+      "mcpName": "revit_create_room",
+      "summary": "Create one room on a level at an XY point that sits inside a closed wall boundary. If the point is not enclosed, nothing is created. name and number are optional. One Undo step named 'Agent: Create room'. Does not save or sync.",
+      "mutates": true,
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "level": { "type": "string", "minLength": 1 },
+          "point": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 3 },
+          "name": { "type": "string", "minLength": 1 },
+          "number": { "type": "string", "minLength": 1 },
+          "units": {
+            "type": "string",
+            "enum": ["project", "mm", "millimetres", "millimeters", "cm", "m", "metres", "meters", "ft", "feet", "in", "inches"],
+            "default": "project"
+          }
+        },
+        "required": ["level", "point"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "create_room_tag",
+      "mcpName": "revit_create_room_tag",
+      "summary": "Tag one room on a floor plan. view is the plan name; omit it to use the active floor plan or a floor plan of the room's level. point is optional. One Undo step named 'Agent: Create room tag'. Does not save or sync.",
+      "mutates": true,
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roomId": { "type": "integer", "minimum": 1 },
+          "view": { "type": "string", "minLength": 1 },
+          "point": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 3 },
+          "units": {
+            "type": "string",
+            "enum": ["project", "mm", "millimetres", "millimeters", "cm", "m", "metres", "meters", "ft", "feet", "in", "inches"],
+            "default": "project"
+          }
+        },
+        "required": ["roomId"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "delete_elements",
+      "mcpName": "revit_delete_elements",
+      "summary": "Delete elements, or preview the deletion. dryRun defaults to true, which lists what would be deleted (including hosted items such as doors on a wall) and deletes nothing. Set dryRun to false only when the user has explicitly asked to delete. Pinned elements and elements in groups are refused unless you handle them as the error describes. One Undo step named 'Agent: Delete elements' when something is actually deleted. Does not save or sync.",
+      "mutates": true,
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "elementIds": {
+            "type": "array",
+            "items": { "type": "integer", "minimum": 1 },
+            "minItems": 1,
+            "maxItems": 200
+          },
+          "dryRun": { "type": "boolean", "default": true },
+          "unpin": { "type": "boolean", "default": false }
+        },
+        "required": ["elementIds"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "flatten_patterns",
+      "mcpName": "revit_flatten_patterns",
+      "summary": "Run the Floor Pattern Flattener on floors in the open model. action is flatten (create the flat pattern), clear (remove it), or refresh (rebuild flattened floors). For flatten, pass elementIds or useSelection true. For clear, pass elementIds, useSelection, or all true. For refresh, omit the ids to refresh every flattened floor, or pass ids to refresh only those. Elements owned by someone else are skipped and listed, not silently ignored. One Undo step. Does not save or sync.",
+      "mutates": true,
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": { "type": "string", "enum": ["flatten", "clear", "refresh"] },
+          "elementIds": {
+            "type": "array",
+            "items": { "type": "integer", "minimum": 1 },
+            "maxItems": 200
+          },
+          "useSelection": { "type": "boolean", "default": false },
+          "all": { "type": "boolean", "default": false }
+        },
+        "required": ["action"],
+        "additionalProperties": false
+      }
+    }
+  ]
+}
