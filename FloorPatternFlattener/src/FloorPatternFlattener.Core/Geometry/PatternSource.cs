@@ -96,13 +96,24 @@ namespace FloorPatternFlattener.Geometry
                     foreach (var g in grids)
                     {
                         if (g == null) continue;
+                        // Line k starts at Origin + k*(Shift along the line, Offset perpendicular to it).
+                        // Offset may be negative (e.g. the 135 deg family of every standard herringbone .pat).
+                        // To use a positive spacing BOTH values must be negated; negating only Offset (the old Math.Abs)
+                        // moves every other line along its length and gives overlapping / crossing bricks.
+                        var gOffset = g.Offset;
+                        var gShift = g.Shift;
+                        if (gOffset < 0)
+                        {
+                            gOffset = -gOffset;
+                            gShift = -gShift;
+                        }
                         var def = new PatternGridDef
                         {
                             Angle = g.Angle,
                             OriginX = g.Origin.U * scale,
                             OriginY = g.Origin.V * scale,
-                            Offset = Math.Abs(g.Offset) * scale,
-                            Shift = g.Shift * scale
+                            Offset = gOffset * scale,
+                            Shift = gShift * scale
                         };
                         var segs = new List<double>();
                         try
