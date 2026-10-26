@@ -86,6 +86,9 @@ namespace FloorPatternFlattener.Storage
             var b = new SchemaBuilder(guid);
             b.SetSchemaName(name);
             b.SetDocumentation(doc);
+            if (!SchemaBuilder.VendorIdIsValid(FpfOptions.VendorId))
+                throw new InvalidOperationException("Invalid extensible storage vendor id '" + FpfOptions.VendorId +
+                                                    "' (needs 4-253 letters/digits).");
             b.SetVendorId(FpfOptions.VendorId);
             b.SetReadAccessLevel(AccessLevel.Public);
             b.SetWriteAccessLevel(AccessLevel.Public);

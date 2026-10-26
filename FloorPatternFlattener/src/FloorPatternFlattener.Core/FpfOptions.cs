@@ -8,8 +8,12 @@ namespace FloorPatternFlattener
     {
         public const string ProductName = "Floor Pattern Flattener";
 
-        /// <summary>Must match &lt;VendorId&gt; in the .addin manifest.</summary>
-        public const string VendorId = "FPF";
+        /// <summary>
+        /// Must match &lt;VendorId&gt; in the .addin manifest. Also used for the extensible storage schemas, where
+        /// Revit requires 4-253 characters (SchemaBuilder.VendorIdIsValid); the original "FPF" was rejected with
+        /// "The vendorId is invalid". Revit stores it upper-cased.
+        /// </summary>
+        public const string VendorId = "TWISTOFFATE";
 
         /// <summary>DirectShape.ApplicationId.</summary>
         public const string ApplicationId = "FloorPatternFlattener";

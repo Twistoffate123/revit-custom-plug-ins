@@ -56,7 +56,7 @@ straight and undistorted in plan, the same pattern you would see in a plan view,
    `Flat Pattern - Floor <id>`, `Comments = "FPF Flat Pattern"`, with the floor's workset and phases
    (created/demolished). If a hatch has more than 25,000 segments it is split across several DirectShapes.
    The total is capped at **100,000 segments per floor**: past that the hatch is truncated and a warning is shown.
-6. **Links (extensible storage).** Fixed-GUID schemas, vendor `FPF`, **public read/write** (files open
+6. **Links (extensible storage).** Fixed-GUID schemas, vendor `TWISTOFFATE`, **public read/write** (files open
    cleanly on machines without the add-in; the data just sits there):
    - on the floor: `Flattened`, DirectShape UniqueIds, a SHA-256 **signature** of all inputs (top-face
      geometry, materials, pattern definitions, phases, workset, algorithm version), dependency UniqueIds, version;

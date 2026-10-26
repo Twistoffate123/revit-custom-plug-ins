@@ -8,8 +8,9 @@
   Manual install: set Assembly to the full path of FloorPatternFlattener.dll
   built for the matching Revit year, then place under the Addins\20XX folder.
 
-  VendorId "FPF" is also the vendor id of the add-in's extensible storage schemas
-  and of its (optional) Dynamic Model Update updater. Do not change it.
+  VendorId "TWISTOFFATE" is also the vendor id of the add-in's extensible storage schemas
+  and of its (optional) Dynamic Model Update updater. Revit requires 4+ characters for schema
+  vendor ids. Do not change it once models contain flattened floors.
 -->
 <RevitAddIns>
   <AddIn Type="Application">
@@ -17,7 +18,7 @@
     <Assembly>FloorPatternFlattener.dll</Assembly>
     <FullClassName>FloorPatternFlattener.App</FullClassName>
     <ClientId>B2E8D401-9C5A-4F17-8E3D-6A1B0C9F4E72</ClientId>
-    <VendorId>FPF</VendorId>
+    <VendorId>TWISTOFFATE</VendorId>
     <VendorDescription>Floor Pattern Flattener contributors</VendorDescription>
   </AddIn>
 </RevitAddIns>
