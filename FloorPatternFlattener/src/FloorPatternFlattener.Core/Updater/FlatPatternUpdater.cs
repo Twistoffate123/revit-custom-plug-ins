@@ -100,6 +100,9 @@ namespace FloorPatternFlattener.Updater
             try { doc = data.GetDocument(); } catch { return; }
             if (doc == null || doc.IsFamilyDocument) return;
 
+            // Ribbon "Auto: Off": no automatic rebuilds; the Update button brings flat patterns up to date.
+            if (!AutoUpdateSetting.Enabled) return;
+
             try
             {
                 Run(doc, data);
