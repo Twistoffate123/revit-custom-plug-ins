@@ -20,10 +20,12 @@ straight and undistorted in plan, the same pattern you would see in a plan view,
   (sketch, shape edits, slope, thickness, type, paint), when its floor type, material or
   material surface pattern changes, or when the fill pattern definition changes. Deleting the floor deletes its
   pattern. If someone deletes the pattern shape, it is recreated.
-- **Native pattern hidden, nothing else touched**: in every non-template view that allows overrides (plans,
-  ceiling plans, 3D, area plans, sections, elevations) only *Surface foreground/background pattern visible* is
-  switched off for the flattened floor. All other overrides are kept. **Views created later get the same
-  override automatically.** Clear turns only these two switches back on.
+- **Live floor pattern stays visible**: the add-in no longer hides the floor's own surface pattern in any view
+  (plans, ceiling plans, 3D, sections, and therefore sheets). Floors flattened by an older version had
+  *Surface foreground/background pattern visible* switched off per view; **Flatten** or **Refresh** (and new
+  views) switch it back on wherever both were off, leaving all other overrides alone. Because no element override
+  is left on the floor, view filters can control the floor's pattern again. The old behaviour is still available
+  via `FpfOptions.HideNativeSurfacePatterns = true`.
 - **Sections / elevations / detail views**: the pattern is zero-thickness lines on the top surface, so it never
   looks like a second floor. The generated shapes are also hidden in section, elevation and detail views by
   default (`FpfOptions.HideInSectionViews`).
@@ -35,8 +37,9 @@ straight and undistorted in plan, the same pattern you would see in a plan view,
    tessellated and projected to XY.
 2. **Pattern.** The material shown on each face is resolved in this order: painted material, then
    `Face.MaterialElementId`, then the type's top compound layer (layer 0 down to the first core layer, first
-   valid material), then the Floors category material. Its **surface foreground** pattern is used (the
-   background pattern if the foreground is none or solid). **All `FillGrid`s** are read, honouring
+   valid material), then the Floors category material. **Both** its surface **background** and **foreground**
+   patterns are flattened (none / solid fills are skipped), each with its own pattern colour, background drawn
+   first. **All `FillGrid`s** are read, honouring
    Angle, Origin, Offset, Shift and dash segments (`GetSegments`, dots become 1.5 mm dashes).
    - Model patterns are used at true size.
    - Drafting patterns (paper-space) are converted as if seen at **1:100** (`FpfOptions.DraftingPatternScale`)
@@ -52,9 +55,13 @@ straight and undistorted in plan, the same pattern you would see in a plan view,
    - **Non-planar top faces** (rare for floors): best effort. The face is triangulated and every upward
      triangle is treated as a small planar face. Lines stay continuous across triangles but are split at
      triangle edges. The report shows the count.
-5. **Real geometry.** The lines are stored in a pinned **DirectShape** (category **Generic Models**) named
-   `Flat Pattern - Floor <id>`, `Comments = "FPF Flat Pattern"`, with the floor's workset and phases
-   (created/demolished). If a hatch has more than 25,000 segments it is split across several DirectShapes.
+5. **Real geometry.** The lines are stored in pinned **DirectShapes** (category **Generic Models**) named
+   `Flat Pattern - Floor <id> Foreground|Background`, `Comments = "FPF Flat Pattern"`, with the floor's workset
+   and phases (created/demolished). Each layer gets its own shapes, its own type (`FPF Flat Pattern - Foreground`
+   / `FPF Flat Pattern - Background`, also written to *Type Comments*) and its lines are drawn on a Generic Models
+   subcategory `FPF Pattern Foreground` / `FPF Pattern Background` (plus ` RGB r-g-b` when the material's pattern
+   colour is not black; the subcategory's line colour is set to that colour when it is created).
+   If a layer has more than 25,000 segments it is split across several DirectShapes.
    The total is capped at **100,000 segments per floor**: past that the hatch is truncated and a warning is shown.
 6. **Links (extensible storage).** Fixed-GUID schemas, vendor `TWISTOFFATE`, **public read/write** (files open
    cleanly on machines without the add-in; the data just sits there):
@@ -76,9 +83,16 @@ double-count floors). Style the lines with a view filter (below).
 
 ## Styling the lines (colour / weight / pattern)
 
-Create a view filter: **Categories = Generic Models**, rule **Comments equals `FPF Flat Pattern`**, then
-override *Projection Lines* in V/G (or in a view template). The same filter can hide the flat patterns in
-specific views.
+The flattened pattern is made of lines, so in V/G and filters it is driven by **Projection Lines**
+(colour, weight, line pattern) and visibility; *Surface Patterns* overrides have nothing to act on.
+
+- **Both layers**: view filter, **Categories = Generic Models**, rule **Comments equals `FPF Flat Pattern`**.
+- **One layer**: rule **Type Comments equals `FPF Flat Pattern - Foreground`** (or `- Background`), or
+  *Type Name* where your Revit version offers it in filter rules.
+- **Default colours / weights**: *Object Styles → Model Objects → Generic Models → FPF Pattern …* subcategories,
+  or per view in V/G. Filters override these.
+
+The same filters can hide the flat patterns in specific views.
 
 ## Supported Revit versions
 
@@ -160,7 +174,7 @@ This writes `%AppData%\Autodesk\Revit\Addins\20XX\FloorPatternFlattener.addin`. 
   capped at 100,000 segments per floor, then truncated with a warning). Heavy hatches slow views, so consider a
   coarser pattern.
 - **Perspective 3D views** still foreshorten with distance. The pattern is flat on the surface, not screen-aligned.
-- **Without the add-in** other users still see (and print) the flat pattern lines and the hidden native pattern,
+- **Without the add-in** other users still see (and print) the flat pattern lines,
   but the pattern does **not** update when they edit floors. When the model is next opened with the add-in, you are
   told how many floors are out of date. Run **Refresh**.
 - The generated lines are Generic Models: hiding the **Floors** category, or hiding or isolating a single floor in a
