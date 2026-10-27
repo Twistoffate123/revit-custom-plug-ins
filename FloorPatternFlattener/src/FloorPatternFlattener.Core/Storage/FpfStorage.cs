@@ -33,6 +33,13 @@ namespace FloorPatternFlattener.Storage
         public static readonly Guid FloorSchemaGuid = new Guid("6F0B8E1A-3C57-4D8E-9A41-2B7C5D90E1F3");
         public static readonly Guid DirectShapeSchemaGuid = new Guid("C4A2D9E7-81B3-4F6A-B05C-9E3D7A21F468");
 
+        /// <summary>
+        /// Separate schema for the flatten style (Lines / Surface), so the original floor schema stays unchanged and
+        /// floors flattened before this option existed read as Lines.
+        /// </summary>
+        public static readonly Guid FloorStyleSchemaGuid = new Guid("A7D35E92-4B1C-4E6F-8D20-5F9C3B71E0A4");
+        private const string FStyle = "Style";
+
         private const string FVersion = "Version";
         private const string FFlattened = "Flattened";
         private const string FDsIds = "DirectShapeUniqueIds";
@@ -76,6 +83,23 @@ namespace FloorPatternFlattener.Storage
                     b.AddSimpleField(FVersion, typeof(int));
                     b.AddSimpleField(FSource, typeof(string));
                     b.AddSimpleField(FChunk, typeof(int));
+                    return b.Finish();
+                }
+            }
+        }
+
+        public static Schema FloorStyleSchema
+        {
+            get
+            {
+                lock (Gate)
+                {
+                    var s = Schema.Lookup(FloorStyleSchemaGuid);
+                    if (s != null) return s;
+                    var b = NewBuilder(FloorStyleSchemaGuid, "FPF_FloorStyle",
+                        "Floor Pattern Flattener: flatten style of the floor (Lines or Surface).");
+                    b.AddSimpleField(FVersion, typeof(int));
+                    b.AddSimpleField(FStyle, typeof(string));
                     return b.Finish();
                 }
             }
@@ -146,6 +170,53 @@ namespace FloorPatternFlattener.Storage
         public static void DeleteFloor(Element floor)
         {
             var schema = Schema.Lookup(FloorSchemaGuid);
+            if (schema == null) return;
+            try
+            {
+                var e = floor.GetEntity(schema);
+                if (e != null && e.IsValid()) floor.DeleteEntity(schema);
+            }
+            catch
+            {
+                // ignore
+            }
+        }
+
+        // ------------------------------------------------------------ floor style
+
+        /// <summary>The floor's flatten style; Lines when none is stored.</summary>
+        public static FlattenStyle ReadStyle(Element floor)
+        {
+            if (floor == null) return FlattenStyle.Lines;
+            var schema = Schema.Lookup(FloorStyleSchemaGuid);
+            if (schema == null) return FlattenStyle.Lines;
+            try
+            {
+                var e = floor.GetEntity(schema);
+                if (e == null || !e.IsValid()) return FlattenStyle.Lines;
+                var text = e.Get<string>(FStyle);
+                if (!string.IsNullOrEmpty(text) && Enum.TryParse(text, true, out FlattenStyle st) &&
+                    Enum.IsDefined(typeof(FlattenStyle), st))
+                    return st;
+            }
+            catch
+            {
+                // ignore
+            }
+            return FlattenStyle.Lines;
+        }
+
+        public static void WriteStyle(Element floor, FlattenStyle style)
+        {
+            var e = new Entity(FloorStyleSchema);
+            e.Set(FVersion, FpfOptions.SchemaDataVersion);
+            e.Set(FStyle, style.ToString());
+            floor.SetEntity(e);
+        }
+
+        public static void DeleteStyle(Element floor)
+        {
+            var schema = Schema.Lookup(FloorStyleSchemaGuid);
             if (schema == null) return;
             try
             {

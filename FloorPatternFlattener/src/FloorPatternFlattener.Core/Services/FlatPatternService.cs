@@ -52,17 +52,21 @@ namespace FloorPatternFlattener.Services
         // =============================================================== apply
 
         /// <summary>
-        /// Ensures the floor is flattened and its hatch is current. Returns true if the model was modified.
+        /// Ensures the floor is flattened and its flat pattern is current. <paramref name="requestedStyle"/> (from the
+        /// Flatten dialog) sets / switches the floor's style; null keeps the stored one (Refresh, updater).
+        /// Returns true if the model was modified.
         /// </summary>
-        public bool Apply(Floor floor, ApplyMode mode, bool applyViewGraphics)
+        public bool Apply(Floor floor, ApplyMode mode, bool applyViewGraphics, FlattenStyle? requestedStyle = null)
         {
             if (floor == null || !floor.IsValidObject) return false;
 
             var link = FpfStorage.ReadFloor(floor) ?? new FloorLinkData();
             var wasFlattened = link.Flattened;
+            var storedStyle = FpfStorage.ReadStyle(floor);
+            var style = requestedStyle ?? storedStyle;
             var existing = ResolveLinkedShapes(floor, link, out var linksOk);
 
-            if (mode == ApplyMode.ValidateLinks && wasFlattened && linksOk)
+            if (mode == ApplyMode.ValidateLinks && wasFlattened && linksOk && style == storedStyle)
                 return false;
 
             FloorHatchInput input;
@@ -76,15 +80,21 @@ namespace FloorPatternFlattener.Services
                 return false;
             }
 
-            if (mode != ApplyMode.Force && wasFlattened && linksOk && link.Signature == input.Signature)
+            var signature = EffectiveSignature(input.Signature, style);
+
+            if (mode != ApplyMode.Force && wasFlattened && linksOk && link.Signature == signature)
             {
                 _report.Unchanged++;
+                var touched = false;
+                // Surface mode: keep the FPF material copies in sync with shading-only edits of the source material
+                // (pattern edits change the signature and rebuild anyway).
+                if (style == FlattenStyle.Surface && CanEdit(floor.Id)) touched = SyncSurfaceMaterials(input);
                 if (applyViewGraphics)
                 {
                     SyncNativePatterns(floor.Id);
                     HideShapesInSectionViews(existing);
                 }
-                return applyViewGraphics;
+                return applyViewGraphics || touched;
             }
 
             // ---- editability (worksharing)
@@ -102,13 +112,84 @@ namespace FloorPatternFlattener.Services
                 }
             }
 
-            // ---- geometry
-            var build = FloorHatchBuilder.Build(input, _doc.Application.ShortCurveTolerance);
             if (input.Pieces.Count == 0) _report.NoTopFace.Add(FpfReport.Describe(floor));
+            _report.NonPlanarFaces += input.NonPlanarFaces;
+
+            var shapes = new List<DirectShape>();
+            var created = new List<DirectShape>();
+            var count = style == FlattenStyle.Surface
+                ? BuildSurfaceShapes(floor, input, existing, shapes, created)
+                : BuildLineShapes(floor, input, existing, shapes, created);
+
+            for (var i = count; i < existing.Count; i++)
+            {
+                try { _doc.Delete(existing[i].Id); }
+                catch { /* ignore */ }
+            }
+
+            // ---- floor link (written last; signature guards the updater against re-trigger loops)
+            if (style != storedStyle) FpfStorage.WriteStyle(floor, style);
+            link.Flattened = true;
+            link.Version = FpfOptions.SchemaDataVersion;
+            link.DirectShapeUniqueIds = shapes.Select(s => s.UniqueId).ToList();
+            link.Signature = signature;
+            link.DependencyUniqueIds = input.DependencyUniqueIds.ToList();
+            FpfStorage.WriteFloor(floor, link);
+            InvalidateShapeIndex();
+
+            if (wasFlattened) _report.Updated++;
+            else _report.Created++;
+            if (style == FlattenStyle.Surface) _report.SurfaceFloors++;
+            else _report.LineFloors++;
+
+            // ---- view graphics (full pass for new floors, copied floors and recreated shapes)
+            if (applyViewGraphics || !wasFlattened || !linksOk)
+            {
+                SyncNativePatterns(floor.Id);
+                HideShapesInSectionViews(shapes);
+            }
+            else if (created.Count > 0)
+            {
+                HideShapesInSectionViews(created);
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Lines keep the original signature (no rebuild of existing floors after the upgrade); Surface adds a suffix
+        /// so switching style always rebuilds.
+        /// </summary>
+        private static string EffectiveSignature(string inputSignature, FlattenStyle style) =>
+            style == FlattenStyle.Surface
+                ? inputSignature + "|surface" + FpfOptions.SurfaceAlgorithmVersion + "|T" +
+                  PatternReader.F(FpfOptions.SurfaceThicknessFeet)
+                : inputSignature;
+
+        /// <summary>Gets an existing shape at <paramref name="i"/> or creates one; null if creation failed.</summary>
+        private DirectShape ShapeAt(Floor floor, List<DirectShape> existing, List<DirectShape> created, int i)
+        {
+            if (i < existing.Count) return existing[i];
+            var ds = CreateShape();
+            if (ds == null)
+            {
+                _report.Errors.Add(FpfReport.Describe(floor) + ": DirectShape could not be created.");
+                return null;
+            }
+            created.Add(ds);
+            return ds;
+        }
+
+        // ------------------------------------------------------------ lines mode
+
+        /// <summary>Lines mode: hatch lines per pattern layer, one or more DirectShapes per layer. Returns shapes used.</summary>
+        private int BuildLineShapes(Floor floor, FloorHatchInput input, List<DirectShape> existing,
+            List<DirectShape> shapes, List<DirectShape> created)
+        {
+            var build = FloorHatchBuilder.Build(input, _doc.Application.ShortCurveTolerance);
             if (build.Truncated) _report.Truncated.Add(FpfReport.Describe(floor));
             if (input.UsedDefaultGrid) _report.DefaultGrid.Add(FpfReport.Describe(floor));
             if (input.UsedDraftingPattern) _report.DraftingScaled.Add(FpfReport.Describe(floor));
-            _report.NonPlanarFaces += input.NonPlanarFaces;
             _report.SkippedGrids += build.SkippedGrids;
 
             // One group per pattern layer (background first, then foreground; per colour), each split into chunks.
@@ -138,25 +219,10 @@ namespace FloorPatternFlattener.Services
             }
 
             // ---- DirectShapes (reuse existing elements so ids, hide state and user overrides survive)
-            var shapes = new List<DirectShape>();
-            var created = new List<DirectShape>();
             for (var i = 0; i < chunks.Count; i++)
             {
-                DirectShape ds;
-                if (i < existing.Count)
-                {
-                    ds = existing[i];
-                }
-                else
-                {
-                    ds = CreateShape();
-                    if (ds == null)
-                    {
-                        _report.Errors.Add(FpfReport.Describe(floor) + ": DirectShape could not be created.");
-                        break;
-                    }
-                    created.Add(ds);
-                }
+                var ds = ShapeAt(floor, existing, created, i);
+                if (ds == null) break;
 
                 var layer = chunkLayers[i];
                 var styleId = _styles.GetLineStyleId(layer);
@@ -192,42 +258,120 @@ namespace FloorPatternFlattener.Services
                     }
                 }
 
-                ConfigureShape(ds, floor, i, chunks.Count, layer);
+                var kind = layer?.Kind ?? PatternLayerKind.Foreground;
+                ConfigureShape(ds, floor, i, chunks.Count, _styles.GetTypeId(kind), kind.ToString());
                 shapes.Add(ds);
                 _report.Segments += written;
                 if (layer != null && layer.Kind == PatternLayerKind.Background) _report.BackgroundSegments += written;
             }
 
-            for (var i = chunks.Count; i < existing.Count; i++)
+            return shapes.Count;
+        }
+
+        // ------------------------------------------------------------ surface mode
+
+        /// <summary>
+        /// Surface mode: one DirectShape holding a thin solid per top face, extruded from the face along its normal
+        /// (<see cref="FpfOptions.SurfaceThicknessFeet"/>), with the face's material copied as
+        /// "FPF Flat Pattern - &lt;material&gt;" (same surface foreground / background patterns and colours). The top
+        /// face of the solid is parallel to the floor face and built in project coordinates, so Revit lays the model
+        /// pattern out the same way it does on the floor. Returns the number of shapes used (0 or 1).
+        /// </summary>
+        private int BuildSurfaceShapes(Floor floor, FloorHatchInput input, List<DirectShape> existing,
+            List<DirectShape> shapes, List<DirectShape> created)
+        {
+            var styleId = _styles.GetSurfaceStyleId();
+            var solids = new List<GeometryObject>();
+            var noPattern = false;
+            var skipped = 0;
+            var materialsChanged = false;
+
+            foreach (var piece in input.Pieces)
             {
-                try { _doc.Delete(existing[i].Id); }
-                catch { /* ignore */ }
+                if (piece.Pattern != null && piece.Pattern.IsDefaultGrid) noPattern = true;
+                var matId = _styles.GetSurfaceMaterialId(piece.Pattern?.MaterialId, ref materialsChanged);
+                var solid = MakeSurfaceSolid(piece, matId, styleId) ??
+                            (styleId != ElementId.InvalidElementId ? MakeSurfaceSolid(piece, matId, ElementId.InvalidElementId) : null);
+                if (solid == null) { skipped++; continue; }
+                solids.Add(solid);
             }
 
-            // ---- floor link (written last; signature guards the updater against re-trigger loops)
-            link.Flattened = true;
-            link.Version = FpfOptions.SchemaDataVersion;
-            link.DirectShapeUniqueIds = shapes.Select(s => s.UniqueId).ToList();
-            link.Signature = input.Signature;
-            link.DependencyUniqueIds = input.DependencyUniqueIds.ToList();
-            FpfStorage.WriteFloor(floor, link);
-            InvalidateShapeIndex();
-
-            if (wasFlattened) _report.Updated++;
-            else _report.Created++;
-
-            // ---- view graphics (full pass for new floors, copied floors and recreated shapes)
-            if (applyViewGraphics || !wasFlattened || !linksOk)
+            if (noPattern) _report.SurfaceNoPattern.Add(FpfReport.Describe(floor));
+            _report.SurfaceFacesSkipped += skipped;
+            if (solids.Count == 0)
             {
-                SyncNativePatterns(floor.Id);
-                HideShapesInSectionViews(shapes);
-            }
-            else if (created.Count > 0)
-            {
-                HideShapesInSectionViews(created);
+                if (input.Pieces.Count > 0)
+                    _report.Errors.Add(FpfReport.Describe(floor) + ": no flat surface could be built from its top faces.");
+                return 0;
             }
 
-            return true;
+            var ds = ShapeAt(floor, existing, created, 0);
+            if (ds == null) return 0;
+            try
+            {
+                ds.SetShape(solids);
+            }
+            catch (Exception ex)
+            {
+                _report.Errors.Add(FpfReport.Describe(floor) + ": SetShape (surface) failed - " + ex.Message);
+            }
+
+            ConfigureShape(ds, floor, 0, 1, _styles.GetSurfaceTypeId(), "Surface");
+            shapes.Add(ds);
+            _report.SurfaceFaces += solids.Count;
+            return 1;
+        }
+
+        private static Solid MakeSurfaceSolid(TopPiece piece, ElementId materialId, ElementId styleId)
+        {
+            if (piece.Loops == null || piece.Loops.Count == 0) return null;
+            var dir = new XYZ(piece.Nx, piece.Ny, piece.Nz);
+            SolidOptions opts;
+            try
+            {
+                opts = new SolidOptions(materialId ?? ElementId.InvalidElementId, styleId ?? ElementId.InvalidElementId);
+            }
+            catch
+            {
+                return null;
+            }
+
+            try
+            {
+                var s = GeometryCreationUtilities.CreateExtrusionGeometry(piece.Loops, dir, FpfOptions.SurfaceThicknessFeet, opts);
+                if (s != null && s.Volume > 0) return s;
+            }
+            catch
+            {
+                // try the opposite loop orientation below
+            }
+
+            try
+            {
+                var flipped = new List<CurveLoop>();
+                foreach (var l in piece.Loops)
+                {
+                    var c = CurveLoop.CreateViaCopy(l);
+                    c.Flip();
+                    flipped.Add(c);
+                }
+                var s = GeometryCreationUtilities.CreateExtrusionGeometry(flipped, dir, FpfOptions.SurfaceThicknessFeet, opts);
+                if (s != null && s.Volume > 0) return s;
+            }
+            catch
+            {
+                // give up on this face
+            }
+            return null;
+        }
+
+        /// <summary>Surface mode: re-syncs the FPF material copies used by the floor; true if any changed.</summary>
+        private bool SyncSurfaceMaterials(FloorHatchInput input)
+        {
+            var changed = false;
+            foreach (var p in input.Pieces)
+                _styles.GetSurfaceMaterialId(p.Pattern?.MaterialId, ref changed);
+            return changed;
         }
 
         private DirectShape CreateShape()
@@ -254,14 +398,13 @@ namespace FloorPatternFlattener.Services
             return list;
         }
 
-        private void ConfigureShape(DirectShape ds, Floor floor, int chunkIndex, int chunkCount, PatternLayer layer)
+        private void ConfigureShape(DirectShape ds, Floor floor, int chunkIndex, int chunkCount, ElementId typeId,
+            string label)
         {
-            var kind = layer?.Kind ?? PatternLayerKind.Foreground;
-
-            // Type per layer: lets view filters target "Type Name" / "Type Comments" = FPF Flat Pattern - Foreground/Background.
+            // Type per layer / mode: lets view filters target "Type Name" / "Type Comments" =
+            // FPF Flat Pattern - Foreground / Background / Surface.
             try
             {
-                var typeId = _styles.GetTypeId(kind);
                 if (typeId != ElementId.InvalidElementId && ds.GetTypeId() != typeId) ds.SetTypeId(typeId);
             }
             catch { /* ignore - shape keeps no type */ }
@@ -275,7 +418,7 @@ namespace FloorPatternFlattener.Services
 
             try
             {
-                var name = FpfOptions.DirectShapeNamePrefix + floor.Id + " " + kind +
+                var name = FpfOptions.DirectShapeNamePrefix + floor.Id + " " + label +
                            (chunkCount > 1 ? " (" + (chunkIndex + 1) + "/" + chunkCount + ")" : string.Empty);
                 ds.SetName(name);
             }
@@ -395,6 +538,7 @@ namespace FloorPatternFlattener.Services
 
             if (shapes.Count > 0) _doc.Delete(shapes.Keys.ToList());
             FpfStorage.DeleteFloor(floor);
+            FpfStorage.DeleteStyle(floor);
             InvalidateShapeIndex();
 
             var id = floor.Id;
@@ -564,7 +708,8 @@ namespace FloorPatternFlattener.Services
             }
             try
             {
-                return FloorHatchBuilder.ReadInput(floor, patterns).Signature != link.Signature;
+                var sig = EffectiveSignature(FloorHatchBuilder.ReadInput(floor, patterns).Signature, FpfStorage.ReadStyle(floor));
+                return sig != link.Signature;
             }
             catch
             {

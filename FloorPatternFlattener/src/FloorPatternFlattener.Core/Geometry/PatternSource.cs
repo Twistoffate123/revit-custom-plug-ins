@@ -56,6 +56,10 @@ namespace FloorPatternFlattener.Geometry
         public bool IsDefaultGrid => Layers.Any(l => l.IsDefaultGrid);
         public bool IsDraftingScaled => Layers.Any(l => l.IsDraftingScaled);
         public string MaterialUniqueId { get; set; } = string.Empty;
+
+        /// <summary>The resolved face material (InvalidElementId when none); Surface mode copies its patterns.</summary>
+        public ElementId MaterialId { get; set; } = ElementId.InvalidElementId;
+
         public IEnumerable<string> PatternUniqueIds => Layers.Select(l => l.PatternUniqueId).Where(s => !string.IsNullOrEmpty(s));
         public string Description => string.Join(" + ", Layers.Select(l => l.Kind.ToString().ToLowerInvariant() + " " + l.Description));
 
@@ -94,7 +98,8 @@ namespace FloorPatternFlattener.Geometry
 
             var src = new PatternSource
             {
-                MaterialUniqueId = material?.UniqueId ?? string.Empty
+                MaterialUniqueId = material?.UniqueId ?? string.Empty,
+                MaterialId = material?.Id ?? ElementId.InvalidElementId
             };
 
             if (material != null)

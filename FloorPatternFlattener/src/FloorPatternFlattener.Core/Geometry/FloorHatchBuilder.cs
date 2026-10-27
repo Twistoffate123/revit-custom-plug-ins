@@ -19,6 +19,9 @@ namespace FloorPatternFlattener.Geometry
         public PatternSource Pattern { get; set; }
         public bool FromTriangulation { get; set; }
 
+        /// <summary>The face's own 3D edge loops (outer first), used by Surface mode; null if unavailable.</summary>
+        public IList<CurveLoop> Loops { get; set; }
+
         /// <summary>Z of the plane at (x, y): vertical projection onto the face plane.</summary>
         public double ZAt(double x, double y) => Oz - (Nx * (x - Ox) + Ny * (y - Oy)) / Nz;
     }
@@ -130,6 +133,7 @@ namespace FloorPatternFlattener.Geometry
                         };
                         AddFaceEdges(face, piece.Region);
                         if (piece.Region.IsEmpty) continue;
+                        try { piece.Loops = pf.GetEdgesAsCurveLoops(); } catch { piece.Loops = null; }
                         piece.Pattern = ResolvePattern(doc, floor, face, fallbackMaterial, patterns, input);
                         input.Pieces.Add(piece);
                     }
@@ -170,6 +174,20 @@ namespace FloorPatternFlattener.Geometry
                             piece.Region.AddEdge(a.X, a.Y, b.X, b.Y);
                             piece.Region.AddEdge(b.X, b.Y, c.X, c.Y);
                             piece.Region.AddEdge(c.X, c.Y, a.X, a.Y);
+                            try
+                            {
+                                var loop = new CurveLoop();
+                                loop.Append(Line.CreateBound(a, b));
+                                loop.Append(Line.CreateBound(b, c));
+                                loop.Append(Line.CreateBound(c, a));
+                                // Orient counter-clockwise seen from above (normal points up).
+                                if (((b - a).CrossProduct(c - a)).Z < 0) loop.Flip();
+                                piece.Loops = new List<CurveLoop> { loop };
+                            }
+                            catch
+                            {
+                                piece.Loops = null; // edge too short - surface mode skips this triangle
+                            }
                             if (!piece.Region.IsEmpty) input.Pieces.Add(piece);
                         }
                     }

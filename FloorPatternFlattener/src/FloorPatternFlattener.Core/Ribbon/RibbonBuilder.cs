@@ -37,16 +37,20 @@ namespace FloorPatternFlattener.Ribbon
                 asm,
                 "FloorPatternFlattener.Commands.CommandFlattenFloorPatterns")
             {
-                ToolTip = "Add a permanent, plan-true flat copy of the selected floors' surface patterns (foreground " +
-                          "and background, real model lines) that follows the slope. The live floor pattern stays visible.",
+                ToolTip = "Add a permanent flat copy of the selected floors' surface patterns (foreground and background). " +
+                          "Asks for a style: Lines (exact match, filters control the lines) or Surface (thin surface with the " +
+                          "floor's patterns, filters control the pattern itself). The live floor pattern is left as it is.",
                 LongDescription =
-                    "Generates the material's fill pattern in plan (aligned to the project internal origin), projects it " +
-                    "vertically onto every top face of the floor and stores it as a pinned Generic Model DirectShape " +
-                    "(Comments = \"" + FpfOptions.CommentsTag + "\", type \"" + FpfOptions.ForegroundTypeName + "\" / \"" +
-                    FpfOptions.BackgroundTypeName + "\", subcategories \"" + FpfOptions.SubcategoryPrefix + "Foreground/Background\"), " +
-                    "so view filters and V/G control it. The floor's live surface pattern is left visible. " +
-                    "The flat pattern is saved with the model and regenerates automatically when the floor, its type, " +
-                    "material or fill pattern changes."
+                    "Lines: the material's fill pattern is generated in plan (aligned to the project internal origin), " +
+                    "projected onto every top face and stored as pinned Generic Model lines (Comments = \"" +
+                    FpfOptions.CommentsTag + "\", types \"" + FpfOptions.ForegroundTypeName + "\" / \"" +
+                    FpfOptions.BackgroundTypeName + "\"); filters control Projection Lines.\n" +
+                    "Surface: a 1.5 mm Generic Model surface on the floor's top faces (type \"" + FpfOptions.SurfaceTypeName +
+                    "\") with material \"" + FpfOptions.SurfaceMaterialPrefix + "<floor material>\" copying its surface " +
+                    "patterns and colours, so filters' Surface Patterns overrides and the Align tool work on it; alignment " +
+                    "to the live pattern is best effort.\n" +
+                    "Each floor remembers its style; the flat pattern is saved with the model and regenerates " +
+                    "automatically when the floor, its type, material or fill pattern changes."
             });
 
             panel.AddItem(new PushButtonData(
@@ -69,11 +73,13 @@ namespace FloorPatternFlattener.Ribbon
                 asm,
                 "FloorPatternFlattener.Commands.CommandRefreshFlattenedPatterns")
             {
-                ToolTip = "Force-regenerate the flat patterns of all flattened floors in this document.",
+                ToolTip = "Force-regenerate the flat patterns of all flattened floors in this document (each in its own " +
+                          "Lines or Surface style).",
                 LongDescription =
                     "Useful after the model was edited without the add-in, after an add-in upgrade, or when some " +
                     "elements were skipped because they were not editable (worksharing). Also re-applies view overrides " +
-                    "and removes orphaned flat-pattern shapes."
+                    "and removes orphaned flat-pattern shapes. Surface floors are only rebuilt when out of date, so a " +
+                    "manual Align of their pattern is kept."
             });
         }
 

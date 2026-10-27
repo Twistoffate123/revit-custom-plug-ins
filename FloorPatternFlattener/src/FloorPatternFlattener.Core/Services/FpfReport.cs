@@ -19,6 +19,11 @@ namespace FloorPatternFlattener.Services
         public int SkippedGrids;
         public int BackgroundSegments;
         public int StyleFallbacks;
+        public int LineFloors;
+        public int SurfaceFloors;
+        public int SurfaceFaces;
+        public int SurfaceFacesSkipped;
+        public List<string> SurfaceNoPattern { get; } = new List<string>();
 
         public List<string> NotEditable { get; } = new List<string>();
         public List<ElementId> NotEditableIds { get; } = new List<ElementId>();
@@ -56,6 +61,9 @@ namespace FloorPatternFlattener.Services
             if (Cleared > 0) sb.AppendLine("Cleared: " + Cleared);
             if (Segments > 0) sb.AppendLine("Hatch line segments written: " + Segments +
                                             (BackgroundSegments > 0 ? " (background pattern: " + BackgroundSegments + ")" : ""));
+            if (LineFloors > 0 && SurfaceFloors > 0)
+                sb.AppendLine("Built as Lines: " + LineFloors + ", as Surface: " + SurfaceFloors);
+            if (SurfaceFaces > 0) sb.AppendLine("Flat surface faces written: " + SurfaceFaces);
             if (OrphansDeleted > 0) sb.AppendLine("Orphaned flat-pattern shapes removed: " + OrphansDeleted);
 
             Section(sb, "Skipped - not editable (worksharing: owned by another user or out of date; reload latest / request, then Refresh)", NotEditable);
@@ -63,12 +71,15 @@ namespace FloorPatternFlattener.Services
             Section(sb, "No pattern on material - default 300 mm grid used", DefaultGrid);
             Section(sb, "Drafting pattern converted at 1:" + FpfOptions.DraftingPatternScale, DraftingScaled);
             Section(sb, "No upward-facing top face found", NoTopFace);
+            Section(sb, "Surface mode: material has no surface pattern (the flat surface shows no pattern)", SurfaceNoPattern);
             Section(sb, "Errors", Errors);
 
             if (NonPlanarFaces > 0)
                 sb.AppendLine().AppendLine("Non-planar top faces approximated by triangulation: " + NonPlanarFaces);
             if (SkippedGrids > 0)
                 sb.AppendLine().AppendLine("Pattern grids skipped (too dense for the floor size): " + SkippedGrids);
+            if (SurfaceFacesSkipped > 0)
+                sb.AppendLine().AppendLine("Surface mode: top faces that could not be turned into a flat surface: " + SurfaceFacesSkipped);
             if (StyleFallbacks > 0)
                 sb.AppendLine().AppendLine("Shapes drawn without the FPF Pattern subcategory (style not accepted): " + StyleFallbacks);
             if (ViewFailures > 0)

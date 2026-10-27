@@ -7,7 +7,7 @@ using FloorPatternFlattener.Storage;
 
 namespace FloorPatternFlattener.Commands
 {
-    /// <summary>Force-regenerates every flattened floor in the document, re-applies view graphics, removes orphans.</summary>
+    /// <summary>Regenerates every flattened floor in the document (Surface floors only when out of date), re-applies view graphics, removes orphans.</summary>
     [Transaction(TransactionMode.Manual)]
     [Regeneration(RegenerationOption.Manual)]
     public class CommandRefreshFlattenedPatterns : IExternalCommand
@@ -35,7 +35,11 @@ namespace FloorPatternFlattener.Commands
                     var svc = new FlatPatternService(doc, report, canEdit);
                     foreach (var f in floors)
                     {
-                        if (f.IsValidObject) svc.Apply(f, ApplyMode.Force, true);
+                        if (!f.IsValidObject) continue;
+                        // Surface floors are rebuilt only when out of date (or their shape is missing), so a manual
+                        // Align of their model pattern survives a Refresh. Lines floors are always regenerated.
+                        var mode = FpfStorage.ReadStyle(f) == FlattenStyle.Surface ? ApplyMode.IfChanged : ApplyMode.Force;
+                        svc.Apply(f, mode, true);
                     }
                     svc.CleanupOrphans();
                     svc.HideAllShapesInSectionViews();

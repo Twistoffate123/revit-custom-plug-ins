@@ -36,6 +36,27 @@ namespace FloorPatternFlattener
         public const string BackgroundTypeName = "FPF Flat Pattern - Background";
 
         /// <summary>
+        /// Surface mode: DirectShapeType (also its Type Comments) of the thin flat surface that carries the floor's
+        /// pattern as a real material surface pattern, so view filters' Surface Patterns overrides act on it.
+        /// </summary>
+        public const string SurfaceTypeName = "FPF Flat Pattern - Surface";
+
+        /// <summary>Surface mode: Generic Models subcategory of the flat surface (edges / Object Styles / V/G).</summary>
+        public const string SurfaceSubcategoryName = "FPF Pattern Surface";
+
+        /// <summary>Surface mode: material name prefix; one material per source material ("FPF Flat Pattern - &lt;name&gt;").</summary>
+        public const string SurfaceMaterialPrefix = "FPF Flat Pattern - ";
+
+        /// <summary>
+        /// Surface mode: thickness of the flat surface (1.5 mm, just above Revit's short-curve tolerance). It sits
+        /// on the floor's top face, so its top face is 1.5 mm above the live floor.
+        /// </summary>
+        public const double SurfaceThicknessFeet = 1.5 / 304.8;
+
+        /// <summary>Bump when surface-mode geometry or material handling changes (part of the surface signature).</summary>
+        public const int SurfaceAlgorithmVersion = 1;
+
+        /// <summary>
         /// false (default): the floor's live surface pattern stays visible in every view; the flat pattern is drawn on top.
         /// true: old behaviour, the live pattern is switched off per view with an element override (note: element
         /// overrides win over view filters, so the floor's pattern then cannot be controlled by filters).
