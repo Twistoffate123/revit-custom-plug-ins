@@ -56,7 +56,8 @@ namespace FloorPatternFlattener.Services
         /// Flatten dialog) sets / switches the floor's style; null keeps the stored one (Refresh, updater).
         /// Returns true if the model was modified.
         /// </summary>
-        public bool Apply(Floor floor, ApplyMode mode, bool applyViewGraphics, FlattenStyle? requestedStyle = null)
+        public bool Apply(Floor floor, ApplyMode mode, bool applyViewGraphics, FlattenStyle? requestedStyle = null,
+            PatternPlacement requestedPlacement = null)
         {
             if (floor == null || !floor.IsValidObject) return false;
 
@@ -64,9 +65,14 @@ namespace FloorPatternFlattener.Services
             var wasFlattened = link.Flattened;
             var storedStyle = FpfStorage.ReadStyle(floor);
             var style = requestedStyle ?? storedStyle;
+            var storedPlacement = FpfStorage.ReadPlacement(floor);
+            var placement = requestedPlacement ?? storedPlacement;
+            var placementChanged = !placement.SameAs(storedPlacement);
+            _currentPlacement = placement;
+            LastFloorSegments = 0;
             var existing = ResolveLinkedShapes(floor, link, out var linksOk);
 
-            if (mode == ApplyMode.ValidateLinks && wasFlattened && linksOk && style == storedStyle)
+            if (mode == ApplyMode.ValidateLinks && wasFlattened && linksOk && style == storedStyle && !placementChanged)
                 return false;
 
             FloorHatchInput input;
@@ -80,7 +86,7 @@ namespace FloorPatternFlattener.Services
                 return false;
             }
 
-            var signature = EffectiveSignature(input.Signature, style);
+            var signature = EffectiveSignature(input.Signature, style, placement);
 
             if (mode != ApplyMode.Force && wasFlattened && linksOk && link.Signature == signature)
             {
@@ -88,7 +94,7 @@ namespace FloorPatternFlattener.Services
                 var touched = false;
                 // Surface mode: keep the FPF material copies in sync with shading-only edits of the source material
                 // (pattern edits change the signature and rebuild anyway).
-                if (style == FlattenStyle.Surface && CanEdit(floor.Id)) touched = SyncSurfaceMaterials(input);
+                if (style == FlattenStyle.Surface && CanEdit(floor.Id)) touched = SyncSurfaceMaterials(input, placement);
                 if (applyViewGraphics)
                 {
                     SyncNativePatterns(floor.Id);
@@ -129,6 +135,7 @@ namespace FloorPatternFlattener.Services
 
             // ---- floor link (written last; signature guards the updater against re-trigger loops)
             if (style != storedStyle) FpfStorage.WriteStyle(floor, style);
+            if (placementChanged) FpfStorage.WritePlacement(floor, placement);
             link.Flattened = true;
             link.Version = FpfOptions.SchemaDataVersion;
             link.DirectShapeUniqueIds = shapes.Select(s => s.UniqueId).ToList();
@@ -160,11 +167,21 @@ namespace FloorPatternFlattener.Services
         /// Lines keep the original signature (no rebuild of existing floors after the upgrade); Surface adds a suffix
         /// so switching style always rebuilds.
         /// </summary>
-        private static string EffectiveSignature(string inputSignature, FlattenStyle style) =>
-            style == FlattenStyle.Surface
+        private static string EffectiveSignature(string inputSignature, FlattenStyle style, PatternPlacement placement)
+        {
+            var sig = style == FlattenStyle.Surface
                 ? inputSignature + "|surface" + FpfOptions.SurfaceAlgorithmVersion + "|T" +
                   PatternReader.F(FpfOptions.SurfaceThicknessFeet)
                 : inputSignature;
+            // Identity adds nothing, so floors flattened before rotation existed are not rebuilt.
+            if (placement != null && !placement.IsIdentity) sig += "|P" + placement.ToStorage();
+            return sig;
+        }
+
+        private PatternPlacement _currentPlacement = PatternPlacement.Identity;
+
+        /// <summary>Line segments written for the floor of the last <see cref="Apply"/> call (Lines mode).</summary>
+        public int LastFloorSegments { get; private set; }
 
         /// <summary>Gets an existing shape at <paramref name="i"/> or creates one; null if creation failed.</summary>
         private DirectShape ShapeAt(Floor floor, List<DirectShape> existing, List<DirectShape> created, int i)
@@ -186,7 +203,7 @@ namespace FloorPatternFlattener.Services
         private int BuildLineShapes(Floor floor, FloorHatchInput input, List<DirectShape> existing,
             List<DirectShape> shapes, List<DirectShape> created)
         {
-            var build = FloorHatchBuilder.Build(input, _doc.Application.ShortCurveTolerance);
+            var build = FloorHatchBuilder.Build(input, _doc.Application.ShortCurveTolerance, _currentPlacement);
             if (build.Truncated) _report.Truncated.Add(FpfReport.Describe(floor));
             if (input.UsedDefaultGrid) _report.DefaultGrid.Add(FpfReport.Describe(floor));
             if (input.UsedDraftingPattern) _report.DraftingScaled.Add(FpfReport.Describe(floor));
@@ -262,6 +279,7 @@ namespace FloorPatternFlattener.Services
                 ConfigureShape(ds, floor, i, chunks.Count, _styles.GetTypeId(kind), kind.ToString());
                 shapes.Add(ds);
                 _report.Segments += written;
+                LastFloorSegments += written;
                 if (layer != null && layer.Kind == PatternLayerKind.Background) _report.BackgroundSegments += written;
             }
 
@@ -289,7 +307,7 @@ namespace FloorPatternFlattener.Services
             foreach (var piece in input.Pieces)
             {
                 if (piece.Pattern != null && piece.Pattern.IsDefaultGrid) noPattern = true;
-                var matId = _styles.GetSurfaceMaterialId(piece.Pattern?.MaterialId, ref materialsChanged);
+                var matId = _styles.GetSurfaceMaterialId(piece.Pattern?.MaterialId, _currentPlacement, ref materialsChanged);
                 var solid = MakeSurfaceSolid(piece, matId, styleId) ??
                             (styleId != ElementId.InvalidElementId ? MakeSurfaceSolid(piece, matId, ElementId.InvalidElementId) : null);
                 if (solid == null) { skipped++; continue; }
@@ -366,11 +384,11 @@ namespace FloorPatternFlattener.Services
         }
 
         /// <summary>Surface mode: re-syncs the FPF material copies used by the floor; true if any changed.</summary>
-        private bool SyncSurfaceMaterials(FloorHatchInput input)
+        private bool SyncSurfaceMaterials(FloorHatchInput input, PatternPlacement placement)
         {
             var changed = false;
             foreach (var p in input.Pieces)
-                _styles.GetSurfaceMaterialId(p.Pattern?.MaterialId, ref changed);
+                _styles.GetSurfaceMaterialId(p.Pattern?.MaterialId, placement, ref changed);
             return changed;
         }
 
@@ -539,6 +557,7 @@ namespace FloorPatternFlattener.Services
             if (shapes.Count > 0) _doc.Delete(shapes.Keys.ToList());
             FpfStorage.DeleteFloor(floor);
             FpfStorage.DeleteStyle(floor);
+            FpfStorage.DeletePlacement(floor);
             InvalidateShapeIndex();
 
             var id = floor.Id;
@@ -708,7 +727,8 @@ namespace FloorPatternFlattener.Services
             }
             try
             {
-                var sig = EffectiveSignature(FloorHatchBuilder.ReadInput(floor, patterns).Signature, FpfStorage.ReadStyle(floor));
+                var sig = EffectiveSignature(FloorHatchBuilder.ReadInput(floor, patterns).Signature, FpfStorage.ReadStyle(floor),
+                    FpfStorage.ReadPlacement(floor));
                 return sig != link.Signature;
             }
             catch

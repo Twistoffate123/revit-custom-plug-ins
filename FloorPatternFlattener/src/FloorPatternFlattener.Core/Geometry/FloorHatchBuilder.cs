@@ -354,8 +354,10 @@ namespace FloorPatternFlattener.Geometry
 
         // ---------------------------------------------------------------- build
 
-        public static FloorHatchResult Build(FloorHatchInput input, double shortCurveTolerance)
+        public static FloorHatchResult Build(FloorHatchInput input, double shortCurveTolerance,
+            PatternPlacement placement = null)
         {
+            placement = placement ?? PatternPlacement.Identity;
             var result = new FloorHatchResult();
             if (input == null) return result;
 
@@ -374,8 +376,9 @@ namespace FloorPatternFlattener.Geometry
                 var offZ = piece.Nz * FpfOptions.SurfaceOffsetFeet;
 
                 foreach (var layer in piece.Pattern.Layers)
-                foreach (var g in layer.Grids)
+                foreach (var g0 in layer.Grids)
                 {
+                    var g = placement.Apply(g0);
                     var dx = Math.Cos(g.Angle);
                     var dy = Math.Sin(g.Angle);
                     var nx = -dy;

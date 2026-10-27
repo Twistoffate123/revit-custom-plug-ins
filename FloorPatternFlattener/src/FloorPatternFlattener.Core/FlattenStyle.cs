@@ -56,4 +56,46 @@ namespace FloorPatternFlattener
             }
         }
     }
+
+    /// <summary>"Auto: On / Off" ribbon switch (per Windows user, remembered between sessions). Default On.</summary>
+    public static class AutoUpdateSetting
+    {
+        private static bool? _value;
+
+        private static string FilePath => Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "FloorPatternFlattener", "auto-update.txt");
+
+        public static bool Enabled
+        {
+            get
+            {
+                if (_value == null)
+                {
+                    try
+                    {
+                        _value = !File.Exists(FilePath) ||
+                                 !string.Equals(File.ReadAllText(FilePath).Trim(), "off", StringComparison.OrdinalIgnoreCase);
+                    }
+                    catch
+                    {
+                        _value = true;
+                    }
+                }
+                return _value.Value;
+            }
+            set
+            {
+                _value = value;
+                try
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(FilePath));
+                    File.WriteAllText(FilePath, value ? "on" : "off");
+                }
+                catch
+                {
+                    // not critical
+                }
+            }
+        }
+    }
 }

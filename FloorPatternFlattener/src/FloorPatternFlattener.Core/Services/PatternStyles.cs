@@ -166,15 +166,26 @@ namespace FloorPatternFlattener.Services
         /// and transparency. Returns InvalidElementId when it cannot be created (the surface then uses the category
         /// material). <paramref name="changed"/> is set when the material had to be created or updated.
         /// </summary>
-        public ElementId GetSurfaceMaterialId(ElementId sourceMaterialId, ref bool changed)
+        public ElementId GetSurfaceMaterialId(ElementId sourceMaterialId, ref bool changed) =>
+            GetSurfaceMaterialId(sourceMaterialId, null, ref changed);
+
+        /// <summary>
+        /// As above; a non-identity <paramref name="placement"/> gives a separate material
+        /// ("FPF Flat Pattern - &lt;name&gt; [R30 #ab12]") whose patterns are rotated / moved copies
+        /// ("FPF &lt;pattern&gt; [R30 #ab12]") of the source material's patterns.
+        /// </summary>
+        public ElementId GetSurfaceMaterialId(ElementId sourceMaterialId, Geometry.PatternPlacement placement,
+            ref bool changed)
         {
-            var key = sourceMaterialId == null ? "-1" : sourceMaterialId.ToString();
+            if (placement != null && placement.IsIdentity) placement = null;
+            var suffix = placement == null ? string.Empty : " " + PlacementTag(placement);
+            var key = (sourceMaterialId == null ? "-1" : sourceMaterialId.ToString()) + suffix;
             if (_surfaceMaterialBySource.TryGetValue(key, out var cached)) return cached;
 
             var source = sourceMaterialId == null || sourceMaterialId == ElementId.InvalidElementId
                 ? null
                 : _doc.GetElement(sourceMaterialId) as Material;
-            var name = SurfaceMaterialName(source);
+            var name = SurfaceMaterialName(source) + suffix;
             var id = ElementId.InvalidElementId;
             try
             {
@@ -197,7 +208,7 @@ namespace FloorPatternFlattener.Services
 
                 if (target != null)
                 {
-                    if (SyncMaterial(source, target)) changed = true;
+                    if (SyncMaterial(source, target, placement, ref changed)) changed = true;
                     id = target.Id;
                 }
             }
@@ -211,13 +222,19 @@ namespace FloorPatternFlattener.Services
         }
 
         /// <summary>Copies the surface pattern settings (and shading) from source to target; true if anything changed.</summary>
-        private static bool SyncMaterial(Material source, Material target)
+        private bool SyncMaterial(Material source, Material target, Geometry.PatternPlacement placement,
+            ref bool patternsChanged)
         {
             var changed = false;
             var none = ElementId.InvalidElementId;
 
             var fgId = source == null ? none : Safe(() => source.SurfaceForegroundPatternId, none);
             var bgId = source == null ? none : Safe(() => source.SurfaceBackgroundPatternId, none);
+            if (placement != null)
+            {
+                fgId = GetPlacedPatternId(fgId, placement, ref patternsChanged);
+                bgId = GetPlacedPatternId(bgId, placement, ref patternsChanged);
+            }
             var fgColor = source == null ? null : Safe<Color>(() => source.SurfaceForegroundPatternColor, null);
             var bgColor = source == null ? null : Safe<Color>(() => source.SurfaceBackgroundPatternColor, null);
 
@@ -238,6 +255,124 @@ namespace FloorPatternFlattener.Services
                     changed |= Try(() => { if (target.Transparency != tr) { target.Transparency = tr; return true; } return false; });
             }
             return changed;
+        }
+
+        // ------------------------------------------------------------------ rotated / anchored pattern copies
+
+        /// <summary>Short, stable tag for names: "[R30 #ab12]" (hash covers angle and anchor).</summary>
+        public static string PlacementTag(Geometry.PatternPlacement p)
+        {
+            var deg = (p.NormalizedAngle * 180.0 / Math.PI).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+            var text = p.ToStorage();
+            uint h = 2166136261;
+            foreach (var ch in text) { h ^= ch; h *= 16777619; }
+            return "[R" + deg + (p.HasAnchor ? " #" + (h & 0xFFFF).ToString("x4") : string.Empty) + "]";
+        }
+
+        private readonly Dictionary<string, ElementId> _placedPatterns = new Dictionary<string, ElementId>();
+
+        /// <summary>
+        /// A copy of fill pattern <paramref name="sourceId"/> with every grid rotated by the placement angle and its
+        /// origin moved to the anchor (model patterns only; drafting patterns are rotated but not moved, their
+        /// spacing is paper-space). Solid fill / none are returned unchanged.
+        /// </summary>
+        private ElementId GetPlacedPatternId(ElementId sourceId, Geometry.PatternPlacement placement, ref bool changed)
+        {
+            if (sourceId == null || sourceId == ElementId.InvalidElementId) return sourceId;
+            var key = sourceId + "|" + placement.ToStorage();
+            if (_placedPatterns.TryGetValue(key, out var cached)) return cached;
+
+            var result = sourceId;
+            try
+            {
+                if (_doc.GetElement(sourceId) is FillPatternElement src)
+                {
+                    var fp = src.GetFillPattern();
+                    if (fp != null && !fp.IsSolidFill)
+                    {
+                        var isModel = fp.Target == FillPatternTarget.Model;
+                        var grids = new List<FillGrid>();
+                        foreach (var g in fp.GetFillGrids())
+                        {
+                            double ox, oy;
+                            if (isModel) placement.Map(g.Origin.U, g.Origin.V, out ox, out oy);
+                            else
+                            {
+                                var rot = new Geometry.PatternPlacement { AngleRad = placement.AngleRad };
+                                rot.Map(g.Origin.U, g.Origin.V, out ox, out oy);
+                            }
+                            var ng = new FillGrid
+                            {
+                                Angle = Wrap(g.Angle + placement.AngleRad),
+                                Origin = new UV(ox, oy),
+                                Offset = g.Offset,
+                                Shift = g.Shift
+                            };
+                            var segs = g.GetSegments();
+                            if (segs != null && segs.Count > 0) ng.SetSegments(segs);
+                            grids.Add(ng);
+                        }
+
+                        var name = "FPF " + SafeName(src) + " " + PlacementTag(placement);
+                        var existing = FillPatternElement.GetFillPatternElementByName(_doc, fp.Target, name);
+                        if (existing == null)
+                        {
+                            var nfp = new FillPattern(name, fp.Target, fp.HostOrientation);
+                            nfp.SetFillGrids(grids);
+                            existing = FillPatternElement.Create(_doc, nfp);
+                            changed = true;
+                        }
+                        else if (!SameGrids(existing.GetFillPattern(), grids))
+                        {
+                            var nfp = new FillPattern(name, fp.Target, fp.HostOrientation);
+                            nfp.SetFillGrids(grids);
+                            existing.SetFillPattern(nfp);
+                            changed = true;
+                        }
+                        if (existing != null) result = existing.Id;
+                    }
+                }
+            }
+            catch
+            {
+                result = sourceId; // fall back to the unrotated pattern
+            }
+
+            _placedPatterns[key] = result;
+            return result;
+        }
+
+        private static double Wrap(double a)
+        {
+            a %= 2 * Math.PI;
+            return a < 0 ? a + 2 * Math.PI : a;
+        }
+
+        private static bool SameGrids(FillPattern fp, IList<FillGrid> grids)
+        {
+            try
+            {
+                var cur = fp?.GetFillGrids();
+                if (cur == null || cur.Count != grids.Count) return false;
+                for (var i = 0; i < cur.Count; i++)
+                {
+                    var a = cur[i];
+                    var b = grids[i];
+                    if (Math.Abs(Wrap(a.Angle) - Wrap(b.Angle)) > 1e-7 || Math.Abs(a.Offset - b.Offset) > 1e-7 ||
+                        Math.Abs(a.Shift - b.Shift) > 1e-7 || Math.Abs(a.Origin.U - b.Origin.U) > 1e-6 ||
+                        Math.Abs(a.Origin.V - b.Origin.V) > 1e-6) return false;
+                    var sa = a.GetSegments();
+                    var sb = b.GetSegments();
+                    if ((sa?.Count ?? 0) != (sb?.Count ?? 0)) return false;
+                    for (var k = 0; k < (sa?.Count ?? 0); k++)
+                        if (Math.Abs(sa[k] - sb[k]) > 1e-7) return false;
+                }
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static bool Try(Func<bool> f)

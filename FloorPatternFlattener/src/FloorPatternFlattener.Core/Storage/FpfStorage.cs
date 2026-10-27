@@ -40,6 +40,10 @@ namespace FloorPatternFlattener.Storage
         public static readonly Guid FloorStyleSchemaGuid = new Guid("A7D35E92-4B1C-4E6F-8D20-5F9C3B71E0A4");
         private const string FStyle = "Style";
 
+        /// <summary>Per-floor rotation / anchor (separate schema; absent = identity).</summary>
+        public static readonly Guid FloorPlacementSchemaGuid = new Guid("D2B6F1C8-5E3A-4A97-9C04-71E8B3A6D5F2");
+        private const string FPlacement = "Placement";
+
         private const string FVersion = "Version";
         private const string FFlattened = "Flattened";
         private const string FDsIds = "DirectShapeUniqueIds";
@@ -100,6 +104,23 @@ namespace FloorPatternFlattener.Storage
                         "Floor Pattern Flattener: flatten style of the floor (Lines or Surface).");
                     b.AddSimpleField(FVersion, typeof(int));
                     b.AddSimpleField(FStyle, typeof(string));
+                    return b.Finish();
+                }
+            }
+        }
+
+        public static Schema FloorPlacementSchema
+        {
+            get
+            {
+                lock (Gate)
+                {
+                    var s = Schema.Lookup(FloorPlacementSchemaGuid);
+                    if (s != null) return s;
+                    var b = NewBuilder(FloorPlacementSchemaGuid, "FPF_FloorPlacement",
+                        "Floor Pattern Flattener: pattern rotation and edge anchor of the floor (plan, internal feet).");
+                    b.AddSimpleField(FVersion, typeof(int));
+                    b.AddSimpleField(FPlacement, typeof(string));
                     return b.Finish();
                 }
             }
@@ -217,6 +238,55 @@ namespace FloorPatternFlattener.Storage
         public static void DeleteStyle(Element floor)
         {
             var schema = Schema.Lookup(FloorStyleSchemaGuid);
+            if (schema == null) return;
+            try
+            {
+                var e = floor.GetEntity(schema);
+                if (e != null && e.IsValid()) floor.DeleteEntity(schema);
+            }
+            catch
+            {
+                // ignore
+            }
+        }
+
+        // ------------------------------------------------------------ floor placement
+
+        /// <summary>The floor's pattern rotation / anchor; identity when none is stored.</summary>
+        public static Geometry.PatternPlacement ReadPlacement(Element floor)
+        {
+            if (floor == null) return Geometry.PatternPlacement.Identity;
+            var schema = Schema.Lookup(FloorPlacementSchemaGuid);
+            if (schema == null) return Geometry.PatternPlacement.Identity;
+            try
+            {
+                var e = floor.GetEntity(schema);
+                if (e == null || !e.IsValid()) return Geometry.PatternPlacement.Identity;
+                return Geometry.PatternPlacement.FromStorage(e.Get<string>(FPlacement));
+            }
+            catch
+            {
+                return Geometry.PatternPlacement.Identity;
+            }
+        }
+
+        /// <summary>Stores the placement; identity removes the entity (same as never set).</summary>
+        public static void WritePlacement(Element floor, Geometry.PatternPlacement placement)
+        {
+            if (placement == null || placement.IsIdentity)
+            {
+                DeletePlacement(floor);
+                return;
+            }
+            var e = new Entity(FloorPlacementSchema);
+            e.Set(FVersion, FpfOptions.SchemaDataVersion);
+            e.Set(FPlacement, placement.ToStorage());
+            floor.SetEntity(e);
+        }
+
+        public static void DeletePlacement(Element floor)
+        {
+            var schema = Schema.Lookup(FloorPlacementSchemaGuid);
             if (schema == null) return;
             try
             {
