@@ -6,8 +6,9 @@ using Autodesk.Revit.DB;
 namespace FloorPatternFlattener.Services
 {
     /// <summary>
-    /// Per-view graphics: hides ONLY the native surface patterns of flattened floors (all other element
-    /// overrides are preserved) and hides generated DirectShapes in section-like views.
+    /// Per-view graphics: keeps the live surface pattern of flattened floors visible (removing the per-element
+    /// "pattern hidden" override older versions set; all other element overrides are preserved) and hides
+    /// generated DirectShapes in section-like views.
     /// All methods must run inside an open transaction or an updater's Execute.
     /// </summary>
     public static class ViewGraphics
@@ -62,6 +63,22 @@ namespace FloorPatternFlattener.Services
             ogs.SetSurfaceBackgroundPatternVisible(visible);
             view.SetElementOverrides(elementId, ogs);
             return true;
+        }
+
+        /// <summary>
+        /// Applies <see cref="FpfOptions.HideNativeSurfacePatterns"/>: hides the live pattern (old behaviour), or, by
+        /// default, turns it back on where BOTH surface patterns are switched off by an element override (the exact
+        /// override earlier versions of this add-in wrote). A single pattern hidden on purpose by the user is left alone.
+        /// </summary>
+        public static bool SyncNativeSurfacePattern(View view, ElementId elementId)
+        {
+            if (FpfOptions.HideNativeSurfacePatterns)
+                return SetNativeSurfacePatternVisible(view, elementId, false);
+
+            var ogs = view.GetElementOverrides(elementId);
+            if (ogs == null) return false;
+            if (ogs.IsSurfaceForegroundPatternVisible || ogs.IsSurfaceBackgroundPatternVisible) return false;
+            return SetNativeSurfacePatternVisible(view, elementId, true);
         }
 
         /// <summary>Hides the given elements in the view (skipping ones already hidden / not hideable).</summary>

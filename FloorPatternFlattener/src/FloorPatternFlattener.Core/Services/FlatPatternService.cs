@@ -30,6 +30,7 @@ namespace FloorPatternFlattener.Services
         private readonly FpfReport _report;
         private readonly Func<ElementId, bool> _canEdit;
         private readonly PatternReader _patterns;
+        private readonly PatternStyles _styles;
         private List<View> _views;
         private Dictionary<string, List<DirectShape>> _shapesBySource;
 
@@ -39,6 +40,7 @@ namespace FloorPatternFlattener.Services
             _report = report ?? new FpfReport();
             _canEdit = canEdit ?? (id => Editability.CanEdit(doc, id));
             _patterns = new PatternReader(doc);
+            _styles = new PatternStyles(doc);
         }
 
         public FpfReport Report => _report;
@@ -79,7 +81,7 @@ namespace FloorPatternFlattener.Services
                 _report.Unchanged++;
                 if (applyViewGraphics)
                 {
-                    HideNativePatterns(floor.Id);
+                    SyncNativePatterns(floor.Id);
                     HideShapesInSectionViews(existing);
                 }
                 return applyViewGraphics;
@@ -109,21 +111,31 @@ namespace FloorPatternFlattener.Services
             _report.NonPlanarFaces += input.NonPlanarFaces;
             _report.SkippedGrids += build.SkippedGrids;
 
-            var chunks = new List<List<GeometryObject>>();
-            var current = new List<GeometryObject>();
+            // One group per pattern layer (background first, then foreground; per colour), each split into chunks.
+            // Every chunk becomes its own DirectShape so foreground and background can be filtered separately.
+            var chunks = new List<List<Segment3>>();
+            var chunkLayers = new List<PatternLayer>();
+            var groups = new List<KeyValuePair<PatternLayer, List<Segment3>>>();
+            var groupIndex = new Dictionary<string, int>();
             foreach (var seg in build.Segments)
             {
-                Line line;
-                try { line = Line.CreateBound(seg.A, seg.B); }
-                catch { continue; }
-                current.Add(line);
-                if (current.Count >= FpfOptions.SegmentsPerDirectShape)
+                var key = seg.Layer?.Key ?? "-";
+                if (!groupIndex.TryGetValue(key, out var gi))
                 {
-                    chunks.Add(current);
-                    current = new List<GeometryObject>();
+                    gi = groups.Count;
+                    groupIndex[key] = gi;
+                    groups.Add(new KeyValuePair<PatternLayer, List<Segment3>>(seg.Layer, new List<Segment3>()));
+                }
+                groups[gi].Value.Add(seg);
+            }
+            foreach (var g in groups.OrderBy(g => g.Key == null ? 1 : (int)g.Key.Kind))
+            {
+                for (var start = 0; start < g.Value.Count; start += FpfOptions.SegmentsPerDirectShape)
+                {
+                    chunks.Add(g.Value.GetRange(start, Math.Min(FpfOptions.SegmentsPerDirectShape, g.Value.Count - start)));
+                    chunkLayers.Add(g.Key);
                 }
             }
-            if (current.Count > 0) chunks.Add(current);
 
             // ---- DirectShapes (reuse existing elements so ids, hide state and user overrides survive)
             var shapes = new List<DirectShape>();
@@ -146,18 +158,44 @@ namespace FloorPatternFlattener.Services
                     created.Add(ds);
                 }
 
+                var layer = chunkLayers[i];
+                var styleId = _styles.GetLineStyleId(layer);
+                var written = 0;
                 try
                 {
-                    ds.SetShape(chunks[i]);
+                    var geo = MakeLines(chunks[i], styleId);
+                    written = geo.Count;
+                    ds.SetShape(geo);
                 }
                 catch (Exception ex)
                 {
-                    _report.Errors.Add(FpfReport.Describe(floor) + ": SetShape failed - " + ex.Message);
+                    if (styleId != ElementId.InvalidElementId)
+                    {
+                        // Fall back to the plain Generic Models style rather than losing the pattern.
+                        try
+                        {
+                            var geo = MakeLines(chunks[i], ElementId.InvalidElementId);
+                            written = geo.Count;
+                            ds.SetShape(geo);
+                            _report.StyleFallbacks++;
+                        }
+                        catch (Exception ex2)
+                        {
+                            written = 0;
+                            _report.Errors.Add(FpfReport.Describe(floor) + ": SetShape failed - " + ex2.Message);
+                        }
+                    }
+                    else
+                    {
+                        written = 0;
+                        _report.Errors.Add(FpfReport.Describe(floor) + ": SetShape failed - " + ex.Message);
+                    }
                 }
 
-                ConfigureShape(ds, floor, i, chunks.Count);
+                ConfigureShape(ds, floor, i, chunks.Count, layer);
                 shapes.Add(ds);
-                _report.Segments += chunks[i].Count;
+                _report.Segments += written;
+                if (layer != null && layer.Kind == PatternLayerKind.Background) _report.BackgroundSegments += written;
             }
 
             for (var i = chunks.Count; i < existing.Count; i++)
@@ -181,7 +219,7 @@ namespace FloorPatternFlattener.Services
             // ---- view graphics (full pass for new floors, copied floors and recreated shapes)
             if (applyViewGraphics || !wasFlattened || !linksOk)
             {
-                HideNativePatterns(floor.Id);
+                SyncNativePatterns(floor.Id);
                 HideShapesInSectionViews(shapes);
             }
             else if (created.Count > 0)
@@ -201,8 +239,33 @@ namespace FloorPatternFlattener.Services
             return ds;
         }
 
-        private void ConfigureShape(DirectShape ds, Floor floor, int chunkIndex, int chunkCount)
+        private static List<GeometryObject> MakeLines(List<Segment3> segments, ElementId styleId)
         {
+            var list = new List<GeometryObject>(segments.Count);
+            var styled = styleId != null && styleId != ElementId.InvalidElementId;
+            foreach (var seg in segments)
+            {
+                Line line;
+                try { line = Line.CreateBound(seg.A, seg.B); }
+                catch { continue; }
+                if (styled) line.SetGraphicsStyleId(styleId);
+                list.Add(line);
+            }
+            return list;
+        }
+
+        private void ConfigureShape(DirectShape ds, Floor floor, int chunkIndex, int chunkCount, PatternLayer layer)
+        {
+            var kind = layer?.Kind ?? PatternLayerKind.Foreground;
+
+            // Type per layer: lets view filters target "Type Name" / "Type Comments" = FPF Flat Pattern - Foreground/Background.
+            try
+            {
+                var typeId = _styles.GetTypeId(kind);
+                if (typeId != ElementId.InvalidElementId && ds.GetTypeId() != typeId) ds.SetTypeId(typeId);
+            }
+            catch { /* ignore - shape keeps no type */ }
+
             try
             {
                 ds.ApplicationId = FpfOptions.ApplicationId;
@@ -212,7 +275,7 @@ namespace FloorPatternFlattener.Services
 
             try
             {
-                var name = FpfOptions.DirectShapeNamePrefix + floor.Id +
+                var name = FpfOptions.DirectShapeNamePrefix + floor.Id + " " + kind +
                            (chunkCount > 1 ? " (" + (chunkIndex + 1) + "/" + chunkCount + ")" : string.Empty);
                 ds.SetName(name);
             }
@@ -395,7 +458,10 @@ namespace FloorPatternFlattener.Services
             return deleted;
         }
 
-        /// <summary>Applies native-pattern hiding (and section hiding of shapes) in newly created views.</summary>
+        /// <summary>
+        /// New views: makes sure the floors' live pattern is visible (a view duplicated from one that an older version
+        /// of the add-in overrode would otherwise inherit the hidden pattern) and hides the shapes in section views.
+        /// </summary>
         public void ApplyToViews(IEnumerable<View> views)
         {
             var targets = views.Where(ViewGraphics.IsOverrideCandidate).ToList();
@@ -409,7 +475,7 @@ namespace FloorPatternFlattener.Services
             {
                 foreach (var f in floors)
                 {
-                    try { ViewGraphics.SetNativeSurfacePatternVisible(v, f.Id, false); }
+                    try { ViewGraphics.SyncNativeSurfacePattern(v, f.Id); }
                     catch { _report.ViewFailures++; }
                 }
 
@@ -427,10 +493,15 @@ namespace FloorPatternFlattener.Services
 
         // =============================================================== helpers
 
-        private void HideNativePatterns(ElementId floorId)
+        /// <summary>
+        /// Keeps the floor's live surface pattern visible in every view (plans, 3D, sections, and so sheets too):
+        /// removes the "pattern hidden" element override that earlier versions set. Element overrides beat view
+        /// filters, so that override also stopped filters from controlling the floor's pattern.
+        /// </summary>
+        private void SyncNativePatterns(ElementId floorId)
         {
             ViewGraphics.ForEachView(Views, CanEdit, _report,
-                v => ViewGraphics.SetNativeSurfacePatternVisible(v, floorId, false));
+                v => ViewGraphics.SyncNativeSurfacePattern(v, floorId));
         }
 
         private void HideShapesInSectionViews(IEnumerable<DirectShape> shapes)

@@ -59,7 +59,8 @@ namespace FloorPatternFlattener.Commands
                 CommandSupport.Show(ok ? "Flatten Floor Patterns" : "Flatten Floor Patterns - failed", report,
                     floors.Count + " floor(s) processed.\nThe flat pattern is saved with the model and updates " +
                     "automatically. Style it with a view filter on Generic Models where Comments = \"" +
-                    FpfOptions.CommentsTag + "\".");
+                    FpfOptions.CommentsTag + "\" (both layers), or Type Comments = \"" + FpfOptions.ForegroundTypeName +
+                    "\" / \"" + FpfOptions.BackgroundTypeName + "\" (one layer). The floor's live pattern stays visible.");
                 return ok ? Result.Succeeded : Result.Failed;
             }
             catch (Exception ex)

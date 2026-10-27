@@ -21,11 +21,32 @@ namespace FloorPatternFlattener
         /// <summary>Written to the DirectShape "Comments" parameter so users can build a view filter.</summary>
         public const string CommentsTag = "FPF Flat Pattern";
 
+        /// <summary>
+        /// Generic Models subcategory prefix for the flattened pattern lines: "FPF Pattern Foreground" /
+        /// "FPF Pattern Background", with " RGB r-g-b" appended when the material's pattern colour is not black.
+        /// The subcategory carries the pattern colour (Object Styles / V/G); view filters override it.
+        /// </summary>
+        public const string SubcategoryPrefix = "FPF Pattern ";
+
+        /// <summary>
+        /// DirectShapeType names for the flattened pattern shapes, so view filters can tell the layers apart
+        /// (rule "Type Name equals ..." or "Type Comments equals ..."). Comments stays <see cref="CommentsTag"/> on all.
+        /// </summary>
+        public const string ForegroundTypeName = "FPF Flat Pattern - Foreground";
+        public const string BackgroundTypeName = "FPF Flat Pattern - Background";
+
+        /// <summary>
+        /// false (default): the floor's live surface pattern stays visible in every view; the flat pattern is drawn on top.
+        /// true: old behaviour, the live pattern is switched off per view with an element override (note: element
+        /// overrides win over view filters, so the floor's pattern then cannot be controlled by filters).
+        /// </summary>
+        public static readonly bool HideNativeSurfacePatterns = false;
+
         /// <summary>DirectShape name prefix: "Flat Pattern - Floor &lt;id&gt;".</summary>
         public const string DirectShapeNamePrefix = "Flat Pattern - Floor ";
 
         /// <summary>Bump when hatch generation changes so stored signatures no longer match.</summary>
-        public const int AlgorithmVersion = 2; // 2: negative FillGrid.Offset handled (herringbone fix)
+        public const int AlgorithmVersion = 3; // 2: herringbone fix; 3: background pattern + per-layer shapes/styles
 
         /// <summary>Extensible storage schema version written into every entity.</summary>
         public const int SchemaDataVersion = 1;

@@ -17,6 +17,8 @@ namespace FloorPatternFlattener.Services
         public HashSet<ElementId> ViewsSkippedNotEditable { get; } = new HashSet<ElementId>();
         public int NonPlanarFaces;
         public int SkippedGrids;
+        public int BackgroundSegments;
+        public int StyleFallbacks;
 
         public List<string> NotEditable { get; } = new List<string>();
         public List<ElementId> NotEditableIds { get; } = new List<ElementId>();
@@ -52,7 +54,8 @@ namespace FloorPatternFlattener.Services
             if (Updated > 0) sb.AppendLine("Regenerated: " + Updated);
             if (Unchanged > 0) sb.AppendLine("Already up to date: " + Unchanged);
             if (Cleared > 0) sb.AppendLine("Cleared: " + Cleared);
-            if (Segments > 0) sb.AppendLine("Hatch line segments written: " + Segments);
+            if (Segments > 0) sb.AppendLine("Hatch line segments written: " + Segments +
+                                            (BackgroundSegments > 0 ? " (background pattern: " + BackgroundSegments + ")" : ""));
             if (OrphansDeleted > 0) sb.AppendLine("Orphaned flat-pattern shapes removed: " + OrphansDeleted);
 
             Section(sb, "Skipped - not editable (worksharing: owned by another user or out of date; reload latest / request, then Refresh)", NotEditable);
@@ -66,6 +69,8 @@ namespace FloorPatternFlattener.Services
                 sb.AppendLine().AppendLine("Non-planar top faces approximated by triangulation: " + NonPlanarFaces);
             if (SkippedGrids > 0)
                 sb.AppendLine().AppendLine("Pattern grids skipped (too dense for the floor size): " + SkippedGrids);
+            if (StyleFallbacks > 0)
+                sb.AppendLine().AppendLine("Shapes drawn without the FPF Pattern subcategory (style not accepted): " + StyleFallbacks);
             if (ViewFailures > 0)
                 sb.AppendLine().AppendLine("Views where overrides could not be set: " + ViewFailures);
             if (ViewsSkippedNotEditable.Count > 0)

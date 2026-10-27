@@ -42,6 +42,9 @@ namespace FloorPatternFlattener.Geometry
     {
         public XYZ A;
         public XYZ B;
+
+        /// <summary>Foreground / background surface pattern (and its colour) this segment belongs to.</summary>
+        public PatternLayer Layer;
     }
 
     public sealed class FloorHatchResult
@@ -56,7 +59,8 @@ namespace FloorPatternFlattener.Geometry
     /// Builds the flat-pattern hatch for a floor:
     ///  1. find all upward-facing top faces (normal.Z &gt; tolerance), incl. every slope of a multi-slope floor;
     ///  2. project each face's edge loops (outer + openings) to XY;
-    ///  3. generate the true fill-pattern lines in PLAN, aligned to the project internal origin;
+    ///  3. generate the true fill-pattern lines in PLAN, aligned to the project internal origin, for the
+    ///     material's background AND foreground surface pattern (each keeps its own colour);
     ///  4. clip them per face (even-odd), apply dashes;
     ///  5. lift the endpoints vertically onto the face plane and offset along the face normal.
     /// A straight line projected vertically onto a plane stays straight, so the result reads as a plan pattern
@@ -200,7 +204,7 @@ namespace FloorPatternFlattener.Geometry
             if (src.IsDefaultGrid) input.UsedDefaultGrid = true;
             if (src.IsDraftingScaled) input.UsedDraftingPattern = true;
             AddUnique(input.DependencyUniqueIds, src.MaterialUniqueId);
-            AddUnique(input.DependencyUniqueIds, src.PatternUniqueId);
+            foreach (var pid in src.PatternUniqueIds) AddUnique(input.DependencyUniqueIds, pid);
             AddUnique(input.PatternDescriptions, src.Description);
             return src;
         }
@@ -351,7 +355,8 @@ namespace FloorPatternFlattener.Geometry
                 var offY = piece.Ny * FpfOptions.SurfaceOffsetFeet;
                 var offZ = piece.Nz * FpfOptions.SurfaceOffsetFeet;
 
-                foreach (var g in piece.Pattern.Grids)
+                foreach (var layer in piece.Pattern.Layers)
+                foreach (var g in layer.Grids)
                 {
                     var dx = Math.Cos(g.Angle);
                     var dy = Math.Sin(g.Angle);
@@ -415,7 +420,7 @@ namespace FloorPatternFlattener.Geometry
                                 return result;
                             }
 
-                            result.Segments.Add(new Segment3 { A = a, B = b });
+                            result.Segments.Add(new Segment3 { A = a, B = b, Layer = layer });
                         }
                     }
                 }

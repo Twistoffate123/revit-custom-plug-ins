@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Text;
 using Autodesk.Revit.DB;
 
@@ -17,23 +18,54 @@ namespace FloorPatternFlattener.Geometry
         public double[] Dashes;  // dash, gap, dash, gap ... (empty => continuous)
     }
 
-    /// <summary>The resolved hatch definition for one material.</summary>
-    public sealed class PatternSource
+    /// <summary>Which of the material's two surface patterns a layer comes from.</summary>
+    public enum PatternLayerKind
     {
+        Background = 0,
+        Foreground = 1
+    }
+
+    /// <summary>
+    /// One surface pattern of a material (foreground or background): its grids and its pattern colour.
+    /// Every layer is generated in its own DirectShape(s), on its own Generic Models subcategory.
+    /// </summary>
+    public sealed class PatternLayer
+    {
+        public PatternLayerKind Kind { get; set; }
         public List<PatternGridDef> Grids { get; } = new List<PatternGridDef>();
+        public byte Red { get; set; }
+        public byte Green { get; set; }
+        public byte Blue { get; set; }
         public bool IsDefaultGrid { get; set; }
         public bool IsDraftingScaled { get; set; }
-        public string MaterialUniqueId { get; set; } = string.Empty;
         public string PatternUniqueId { get; set; } = string.Empty;
         public string Description { get; set; } = string.Empty;
+
+        /// <summary>Groups segments into shapes: same kind + same colour share DirectShapes and a subcategory.</summary>
+        public string Key => ((int)Kind).ToString(CultureInfo.InvariantCulture) + "|" + Red + "," + Green + "," + Blue;
+
+        public bool IsBlack => Red == 0 && Green == 0 && Blue == 0;
+    }
+
+    /// <summary>The resolved hatch definition for one material: background layer (if any) then foreground layer.</summary>
+    public sealed class PatternSource
+    {
+        /// <summary>Draw order: background first, foreground on top.</summary>
+        public List<PatternLayer> Layers { get; } = new List<PatternLayer>();
+
+        public bool IsDefaultGrid => Layers.Any(l => l.IsDefaultGrid);
+        public bool IsDraftingScaled => Layers.Any(l => l.IsDraftingScaled);
+        public string MaterialUniqueId { get; set; } = string.Empty;
+        public IEnumerable<string> PatternUniqueIds => Layers.Select(l => l.PatternUniqueId).Where(s => !string.IsNullOrEmpty(s));
+        public string Description => string.Join(" + ", Layers.Select(l => l.Kind.ToString().ToLowerInvariant() + " " + l.Description));
 
         /// <summary>Deterministic text used in the floor signature.</summary>
         public string SignatureText { get; set; } = string.Empty;
     }
 
     /// <summary>
-    /// Reads the true fill-pattern geometry for a material's surface pattern (foreground, fallback background).
-    /// Results are cached per material id for the lifetime of the reader (one command / updater run).
+    /// Reads the true fill-pattern geometry for BOTH of a material's surface patterns (foreground and background,
+    /// each with its own colour). Results are cached per material id for the lifetime of the reader.
     /// </summary>
     public sealed class PatternReader
     {
@@ -60,98 +92,137 @@ namespace FloorPatternFlattener.Geometry
             if (materialId != null && materialId != ElementId.InvalidElementId)
                 material = _doc.GetElement(materialId) as Material;
 
-            FillPatternElement fpe = null;
-            if (material != null)
-            {
-                fpe = TryGetPattern(material.SurfaceForegroundPatternId);
-                if (fpe == null || IsSolidOrEmpty(fpe))
-                {
-                    var bg = TryGetPattern(material.SurfaceBackgroundPatternId);
-                    if (bg != null && !IsSolidOrEmpty(bg)) fpe = bg;
-                }
-            }
-
             var src = new PatternSource
             {
                 MaterialUniqueId = material?.UniqueId ?? string.Empty
             };
 
-            FillPattern pattern = null;
-            try { pattern = fpe?.GetFillPattern(); } catch { pattern = null; }
-
-            if (pattern != null && !pattern.IsSolidFill)
+            if (material != null)
             {
-                var scale = 1.0;
-                if (pattern.Target == FillPatternTarget.Drafting)
-                {
-                    scale = FpfOptions.DraftingPatternScale;
-                    src.IsDraftingScaled = true;
-                }
+                // Background first so the foreground is drawn on top (same stacking as Revit).
+                var bg = ReadLayer(SafePatternId(() => material.SurfaceBackgroundPatternId), PatternLayerKind.Background,
+                    SafeColor(() => material.SurfaceBackgroundPatternColor));
+                if (bg != null) src.Layers.Add(bg);
 
-                IList<FillGrid> grids = null;
-                try { grids = pattern.GetFillGrids(); } catch { grids = null; }
-
-                if (grids != null)
-                {
-                    foreach (var g in grids)
-                    {
-                        if (g == null) continue;
-                        // Line k starts at Origin + k*(Shift along the line, Offset perpendicular to it).
-                        // Offset may be negative (e.g. the 135 deg family of every standard herringbone .pat).
-                        // To use a positive spacing BOTH values must be negated; negating only Offset (the old Math.Abs)
-                        // moves every other line along its length and gives overlapping / crossing bricks.
-                        var gOffset = g.Offset;
-                        var gShift = g.Shift;
-                        if (gOffset < 0)
-                        {
-                            gOffset = -gOffset;
-                            gShift = -gShift;
-                        }
-                        var def = new PatternGridDef
-                        {
-                            Angle = g.Angle,
-                            OriginX = g.Origin.U * scale,
-                            OriginY = g.Origin.V * scale,
-                            Offset = gOffset * scale,
-                            Shift = gShift * scale
-                        };
-                        var segs = new List<double>();
-                        try
-                        {
-                            var raw = g.GetSegments();
-                            if (raw != null)
-                                foreach (var s in raw) segs.Add(Math.Abs(s) * scale);
-                        }
-                        catch
-                        {
-                            // continuous line
-                        }
-                        def.Dashes = segs.ToArray();
-                        src.Grids.Add(def);
-                    }
-                }
-
-                if (src.Grids.Count > 0)
-                {
-                    src.PatternUniqueId = fpe.UniqueId;
-                    src.Description = (pattern.Target == FillPatternTarget.Drafting ? "drafting pattern '" : "model pattern '")
-                                      + SafeName(fpe) + "'";
-                }
+                var fg = ReadLayer(SafePatternId(() => material.SurfaceForegroundPatternId), PatternLayerKind.Foreground,
+                    SafeColor(() => material.SurfaceForegroundPatternColor));
+                if (fg != null) src.Layers.Add(fg);
             }
 
-            if (src.Grids.Count == 0)
+            if (src.Layers.Count == 0)
             {
-                src.IsDefaultGrid = true;
-                src.IsDraftingScaled = false;
-                src.PatternUniqueId = fpe?.UniqueId ?? string.Empty;
-                src.Description = "default 300 mm grid";
+                var color = material == null ? null : SafeColor(() => material.SurfaceForegroundPatternColor);
+                var layer = new PatternLayer
+                {
+                    Kind = PatternLayerKind.Foreground,
+                    IsDefaultGrid = true,
+                    Description = "default 300 mm grid"
+                };
+                ApplyColor(layer, color);
                 var s = FpfOptions.DefaultGridSpacingFeet;
-                src.Grids.Add(new PatternGridDef { Angle = 0, Offset = s, Dashes = new double[0] });
-                src.Grids.Add(new PatternGridDef { Angle = Math.PI / 2.0, Offset = s, Dashes = new double[0] });
+                layer.Grids.Add(new PatternGridDef { Angle = 0, Offset = s, Dashes = new double[0] });
+                layer.Grids.Add(new PatternGridDef { Angle = Math.PI / 2.0, Offset = s, Dashes = new double[0] });
+                src.Layers.Add(layer);
             }
 
             src.SignatureText = BuildSignatureText(src);
             return src;
+        }
+
+        /// <summary>Reads one surface pattern; null when it is none, solid or has no grids.</summary>
+        private PatternLayer ReadLayer(ElementId patternId, PatternLayerKind kind, Color color)
+        {
+            var fpe = TryGetPattern(patternId);
+            if (fpe == null) return null;
+
+            FillPattern pattern;
+            try { pattern = fpe.GetFillPattern(); } catch { pattern = null; }
+            if (pattern == null || pattern.IsSolidFill) return null;
+
+            var layer = new PatternLayer { Kind = kind };
+            ApplyColor(layer, color);
+
+            var scale = 1.0;
+            if (pattern.Target == FillPatternTarget.Drafting)
+            {
+                scale = FpfOptions.DraftingPatternScale;
+                layer.IsDraftingScaled = true;
+            }
+
+            IList<FillGrid> grids;
+            try { grids = pattern.GetFillGrids(); } catch { grids = null; }
+            if (grids == null) return null;
+
+            foreach (var g in grids)
+            {
+                if (g == null) continue;
+                // Line k starts at Origin + k*(Shift along the line, Offset perpendicular to it).
+                // Offset may be negative (e.g. the 135 deg family of every standard herringbone .pat).
+                // To use a positive spacing BOTH values must be negated; negating only Offset (the old Math.Abs)
+                // moves every other line along its length and gives overlapping / crossing bricks.
+                var gOffset = g.Offset;
+                var gShift = g.Shift;
+                if (gOffset < 0)
+                {
+                    gOffset = -gOffset;
+                    gShift = -gShift;
+                }
+                var def = new PatternGridDef
+                {
+                    Angle = g.Angle,
+                    OriginX = g.Origin.U * scale,
+                    OriginY = g.Origin.V * scale,
+                    Offset = gOffset * scale,
+                    Shift = gShift * scale
+                };
+                var segs = new List<double>();
+                try
+                {
+                    var raw = g.GetSegments();
+                    if (raw != null)
+                        foreach (var s in raw) segs.Add(Math.Abs(s) * scale);
+                }
+                catch
+                {
+                    // continuous line
+                }
+                def.Dashes = segs.ToArray();
+                layer.Grids.Add(def);
+            }
+
+            if (layer.Grids.Count == 0) return null;
+
+            layer.PatternUniqueId = fpe.UniqueId;
+            layer.Description = (pattern.Target == FillPatternTarget.Drafting ? "drafting pattern '" : "model pattern '")
+                                + SafeName(fpe) + "'";
+            return layer;
+        }
+
+        private static void ApplyColor(PatternLayer layer, Color c)
+        {
+            try
+            {
+                if (c != null && c.IsValid)
+                {
+                    layer.Red = c.Red;
+                    layer.Green = c.Green;
+                    layer.Blue = c.Blue;
+                }
+            }
+            catch
+            {
+                // keep black
+            }
+        }
+
+        private static Color SafeColor(Func<Color> get)
+        {
+            try { return get(); } catch { return null; }
+        }
+
+        private static ElementId SafePatternId(Func<ElementId> get)
+        {
+            try { return get(); } catch { return ElementId.InvalidElementId; }
         }
 
         private FillPatternElement TryGetPattern(ElementId id)
@@ -167,19 +238,6 @@ namespace FloorPatternFlattener.Geometry
             }
         }
 
-        private static bool IsSolidOrEmpty(FillPatternElement fpe)
-        {
-            try
-            {
-                var p = fpe.GetFillPattern();
-                return p == null || p.IsSolidFill || p.GridCount == 0;
-            }
-            catch
-            {
-                return true;
-            }
-        }
-
         private static string SafeName(Element e)
         {
             try { return e.Name; } catch { return "?"; }
@@ -188,13 +246,18 @@ namespace FloorPatternFlattener.Geometry
         private static string BuildSignatureText(PatternSource src)
         {
             var sb = new StringBuilder();
-            sb.Append("M:").Append(src.MaterialUniqueId).Append("|P:").Append(src.PatternUniqueId)
-              .Append("|D:").Append(src.IsDefaultGrid ? 1 : 0).Append(src.IsDraftingScaled ? 1 : 0);
-            foreach (var g in src.Grids)
+            sb.Append("M:").Append(src.MaterialUniqueId);
+            foreach (var l in src.Layers)
             {
-                sb.Append("|G").Append(F(g.Angle)).Append(',').Append(F(g.OriginX)).Append(',').Append(F(g.OriginY))
-                  .Append(',').Append(F(g.Offset)).Append(',').Append(F(g.Shift));
-                foreach (var d in g.Dashes) sb.Append(';').Append(F(d));
+                sb.Append("|L").Append((int)l.Kind).Append(':').Append(l.PatternUniqueId)
+                  .Append("|C").Append(l.Red).Append(',').Append(l.Green).Append(',').Append(l.Blue)
+                  .Append("|D:").Append(l.IsDefaultGrid ? 1 : 0).Append(l.IsDraftingScaled ? 1 : 0);
+                foreach (var g in l.Grids)
+                {
+                    sb.Append("|G").Append(F(g.Angle)).Append(',').Append(F(g.OriginX)).Append(',').Append(F(g.OriginY))
+                      .Append(',').Append(F(g.Offset)).Append(',').Append(F(g.Shift));
+                    foreach (var d in g.Dashes) sb.Append(';').Append(F(d));
+                }
             }
             return sb.ToString();
         }

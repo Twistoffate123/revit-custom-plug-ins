@@ -37,12 +37,14 @@ namespace FloorPatternFlattener.Ribbon
                 asm,
                 "FloorPatternFlattener.Commands.CommandFlattenFloorPatterns")
             {
-                ToolTip = "Replace the native surface pattern of the selected floors with a permanent, plan-true " +
-                          "flat pattern (real model lines) that follows the slope.",
+                ToolTip = "Add a permanent, plan-true flat copy of the selected floors' surface patterns (foreground " +
+                          "and background, real model lines) that follows the slope. The live floor pattern stays visible.",
                 LongDescription =
                     "Generates the material's fill pattern in plan (aligned to the project internal origin), projects it " +
                     "vertically onto every top face of the floor and stores it as a pinned Generic Model DirectShape " +
-                    "(Comments = \"" + FpfOptions.CommentsTag + "\"). The native surface pattern is hidden per view. " +
+                    "(Comments = \"" + FpfOptions.CommentsTag + "\", type \"" + FpfOptions.ForegroundTypeName + "\" / \"" +
+                    FpfOptions.BackgroundTypeName + "\", subcategories \"" + FpfOptions.SubcategoryPrefix + "Foreground/Background\"), " +
+                    "so view filters and V/G control it. The floor's live surface pattern is left visible. " +
                     "The flat pattern is saved with the model and regenerates automatically when the floor, its type, " +
                     "material or fill pattern changes."
             });
@@ -54,7 +56,7 @@ namespace FloorPatternFlattener.Ribbon
                 "FloorPatternFlattener.Commands.CommandClearFlattenedPatterns")
             {
                 ToolTip = "Remove flat patterns from the selected flattened floors (or all floors in the document " +
-                          "if none are selected) and show the native surface pattern again.",
+                          "if none are selected).",
                 LongDescription =
                     "Deletes the generated DirectShapes, removes the add-in data from the floors and turns the native " +
                     "surface pattern visibility back on. Other view overrides are left untouched. Use this before " +
