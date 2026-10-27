@@ -204,6 +204,42 @@ This writes `%AppData%\Autodesk\Revit\Addins\20XX\FloorPatternFlattener.addin`. 
 3. **Clear Flattened Patterns** to go back to the native pattern. Every command is a single named, undoable
    transaction (Ctrl+Z works).
 
+## Pattern placement, preview, scope, edit
+
+**Flatten Floor Patterns** opens a dialog:
+
+- **Style**: Lines or Surface (the last one you used is the default).
+- **Angle** (degrees, anticlockwise), **Align to Edge...** (pick a straight model edge: slab edge, kerb, wall) and **Align to Line...** (pick a model/detail line or grid). The pattern turns to that direction and starts at the edge end nearest your click instead of the project origin. **Clear** goes back to 0 deg with no anchor, which is the exact match with the live floor pattern (the default).
+- **Apply to**: only the selected floor(s), or all visible floors of the same type(s) in the active view.
+- **Preview** builds the result for real inside a transaction group and shows it in the view. **Apply** keeps it as one undo step. **Discard** rolls everything back, so the model is untouched. Lines mode shows the line count and asks for confirmation when a single floor would get more than 10,000 lines.
+
+Each floor stores its style, angle and anchor, so **Refresh**, **Update** and the automatic rebuild reuse them. Floors with no rotation and no anchor behave exactly as before and are not rebuilt by the upgrade.
+
+**Edit Flattened Pattern** re-opens a flattened floor (select it or its flat pattern, or pick one) with its stored settings loaded. Preview, then Apply to replace the flat pattern, or Discard to keep the old one.
+
+Notes:
+- Lines are rotated and anchored exactly.
+- Surface uses rotated copies of the fill patterns, named "FPF <pattern> [R30 #...]", on its own material. The anchor applies to model patterns only (drafting patterns are rotated only), and alignment is best effort.
+- The edge or line must be in the current model, not in a link.
+- The preview is a temporary model change shown while the dialog is open. It is not a moving on-screen overlay.
+
+## Auto update and Update
+
+- **Auto: On / Auto: Off** turns the automatic rebuild on or off. The setting is remembered between sessions in `%AppData%\FloorPatternFlattener\auto-update.txt`.
+- When Auto is Off, nothing is rebuilt until you press **Update Flattened**. Update rebuilds the selected flattened floors, one picked floor, or all of them. It shows progress with Cancel (floors already done are kept) and a summary, all as one undo step.
+
+## Filters and the sheet (host) file
+
+The flat patterns are controlled only by element data: Comments = "FPF Flat Pattern" on every shape, the types "FPF Flat Pattern - Foreground" / "- Background" / "- Surface" (their Type Comments carry the same text) and the "FPF Pattern ..." subcategories. Nothing relies on view overrides inside the model file, and the live floor pattern is never hidden.
+
+**Flat Pattern Filters** creates or updates the Generic Model filters "FPF - Flat Pattern" (Comments), "FPF - Flat Pattern Foreground", "FPF - Flat Pattern Background" and "FPF - Flat Pattern Surface" (Type Comments). It can add them to all view templates or to the active view, or remove them everywhere (the filters are deleted). They are added with no overrides; set lines, patterns, halftone or visibility in Visibility/Graphics > Filters.
+
+To control everything from the sheet file that links the models:
+1. Open the **sheet file** and run **Flat Pattern Filters** there (the add-in only needs to be loaded; nothing is flattened in that file).
+2. In Visibility/Graphics > Revit Links, set each linked model to **By Host View** (or Custom with filters By Host View), so the host filters apply to the linked flat patterns.
+3. Style the FPF filters in your view templates. Alternatively use Object Styles > Generic Models > the "FPF Pattern ..." subcategories, which also come through the link.
+4. Sections: the model file hides the shapes in its own section views, but that does not carry through a link. In the sheet file, turn off "FPF - Flat Pattern" in section templates.
+
 ## Worksharing
 
 - Commands check out (borrow) the floors and their pattern shapes first. Anything owned by someone else, or
