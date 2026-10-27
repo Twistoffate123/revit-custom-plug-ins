@@ -1,17 +1,22 @@
 # Floor Pattern Flattener
 
-Revit ribbon add-in (Revit **2023–2027**) that replaces a floor's native surface pattern with a **permanent,
-plan-true "flat" pattern made of real model lines**. The lines follow the floor's slope exactly but look
+Revit ribbon add-in (Revit **2023–2027**) that adds a **permanent "flat" copy of a floor's surface pattern**,
+either as **plan-true real model lines** (*Lines* style) or as a **thin flat surface carrying the floor's material
+patterns** (*Surface* style, see [Lines or Surface](#lines-or-surface)). The lines follow the floor's slope exactly but look
 straight and undistorted in plan, the same pattern you would see in a plan view, and because they are real geometry they
 **print, export and show in every view**.
 
 ## What it does
 
 - **Custom Tools → Floor Patterns** ribbon panel:
-  - **Flatten Floor Patterns**: flattens the selected floors (or asks you to pick some).
+  - **Flatten Floor Patterns**: flattens the selected floors (or asks you to pick some). A dialog asks for the
+    style, **Lines** or **Surface**; the last choice is the default (saved in
+    `%AppData%\FloorPatternFlattener\last-flatten-style.txt`). Running it on an already flattened floor switches
+    it to the style you pick.
   - **Clear Flattened Patterns**: removes the flat pattern from the selected flattened floors (selecting a
     flat-pattern shape also works), or from **all** flattened floors in the document if none are selected (asks first).
-  - **Refresh Flattened Patterns**: force-regenerates every flattened floor, re-applies view overrides and
+  - **Refresh Flattened Patterns**: regenerates every flattened floor in its own style (Lines floors always,
+    Surface floors only when out of date so a manual Align is kept), re-applies view overrides and
     removes orphaned shapes. Use it after an add-in upgrade, after the model was edited without the add-in,
     or when elements were skipped because of worksharing.
 - **Permanent**: the flat pattern is saved in the RVT. Once a floor is flattened it stays flattened across
@@ -26,9 +31,48 @@ straight and undistorted in plan, the same pattern you would see in a plan view,
   views) switch it back on wherever both were off, leaving all other overrides alone. Because no element override
   is left on the floor, view filters can control the floor's pattern again. The old behaviour is still available
   via `FpfOptions.HideNativeSurfacePatterns = true`.
-- **Sections / elevations / detail views**: the pattern is zero-thickness lines on the top surface, so it never
-  looks like a second floor. The generated shapes are also hidden in section, elevation and detail views by
+- **Sections / elevations / detail views**: the *Lines* pattern is zero-thickness lines on the top surface and
+  the *Surface* is only 1.5 mm thick, so neither looks like a second floor. The generated shapes are also hidden in section, elevation and detail views by
   default (`FpfOptions.HideInSectionViews`).
+
+## Lines or Surface
+
+| | **Lines** (default, the original behaviour) | **Surface** |
+|---|---|---|
+| What is created | Pinned Generic Model DirectShapes made of model lines, one set per pattern layer | One pinned Generic Model DirectShape: a **1.5 mm** solid on each top face (`FpfOptions.SurfaceThicknessFeet`) |
+| Pattern match | Exact, plan-true on slopes, aligned to the project internal origin | Revit draws the floor material's own model pattern on the surface; **best-effort alignment** (below) |
+| View filters control | Projection Lines (colour, weight, line pattern) and visibility | **Surface Patterns** (foreground / background pattern, colour, visibility), Transparency, visibility |
+| Align tool | n/a (lines) | Works on the surface's model pattern |
+| Type / Type Comments | `FPF Flat Pattern - Foreground` / `- Background` | `FPF Flat Pattern - Surface` |
+| Comments | `FPF Flat Pattern` | `FPF Flat Pattern` |
+| Subcategory | `FPF Pattern Foreground` / `Background` (+ RGB) | `FPF Pattern Surface` |
+
+**Surface material.** For each material shown on the floor's top faces the add-in keeps a copy named
+`FPF Flat Pattern - <material name>` (`FPF Flat Pattern - No Material` when nothing is found). Its surface
+foreground / background pattern ids and colours, shading colour and transparency are synced from the source
+material whenever the floor is flattened or updated, so editing the floor's material updates the surface. If the
+source material has no surface pattern (or only solid fill), the surface shows none and the floor is listed in the
+report. The surface is **not** a filled region and not a floor, so it stays out of floor schedules and areas.
+
+**Each floor remembers its style** (separate extensible-storage schema `FPF_FloorStyle`): Refresh, the automatic
+update after a floor / type / material / fill-pattern change, and copied floors all keep it. Floors flattened by an
+earlier version are *Lines* and are not regenerated by this upgrade.
+
+**Alignment (Surface style) — how it is handled and its limits.**
+
+- The Revit API cannot read or set model-pattern alignment on a face. The add-in builds the surface from the floor's
+  own top-face edge loops, in project coordinates, as a face parallel to the floor top (offset 1.5 mm along the
+  normal). Revit then lays the model pattern out on it with its own default rules, which usually matches an
+  un-aligned floor in direction and spacing; the start point may be shifted.
+- If the pattern does not line up, use **Align** (or Tab-select a pattern line and move it) on the surface's pattern.
+- An alignment you set on the **live floor** by hand cannot be read, so it is not copied.
+- A manual Align on the surface is likely lost whenever the surface is rebuilt (the floor's geometry, type, material
+  or pattern changes, or you switch style). Refresh does not rebuild Surface floors that are up to date.
+- On slopes the surface pattern follows the face, like the live floor (stretched in plan), not plan-true like *Lines*.
+- Non-planar top faces are built from the same triangles used for *Lines*; each triangle gets its own pattern
+  layout, so the pattern can break at triangle edges.
+- In plan the surface sits on top of the floor and covers the live floor's pattern; hide either with a filter if
+  you see both.
 
 ## How it works
 
@@ -83,8 +127,10 @@ double-count floors). Style the lines with a view filter (below).
 
 ## Styling the lines (colour / weight / pattern)
 
-The flattened pattern is made of lines, so in V/G and filters it is driven by **Projection Lines**
-(colour, weight, line pattern) and visibility; *Surface Patterns* overrides have nothing to act on.
+In the *Lines* style the flattened pattern is made of lines, so in V/G and filters it is driven by **Projection
+Lines** (colour, weight, line pattern) and visibility; *Surface Patterns* overrides have nothing to act on. For
+filters that act on the pattern itself, use the *Surface* style: rule **Type Comments equals
+`FPF Flat Pattern - Surface`** (or the Comments rule) with a **Surface Patterns** override.
 
 - **Both layers**: view filter, **Categories = Generic Models**, rule **Comments equals `FPF Flat Pattern`**.
 - **One layer**: rule **Type Comments equals `FPF Flat Pattern - Foreground`** (or `- Background`), or
@@ -179,7 +225,8 @@ This writes `%AppData%\Autodesk\Revit\Addins\20XX\FloorPatternFlattener.addin`. 
   told how many floors are out of date. Run **Refresh**.
 - The generated lines are Generic Models: hiding the **Floors** category, or hiding or isolating a single floor in a
   view, does not hide its pattern. Use the Comments filter.
-- Pattern alignment follows the project internal origin. Pattern alignment changed manually in Revit (Align /
+- *Lines* pattern alignment follows the project internal origin; *Surface* alignment is Revit's own (see
+  [Lines or Surface](#lines-or-surface)). Pattern alignment changed manually in Revit (Align /
   surface pattern dragging) is not read.
 - Floors inside **groups**, **design options** or **linked models** are not specially handled. The DirectShape is
   created in the host model outside any group or option.
@@ -190,7 +237,8 @@ This writes `%AppData%\Autodesk\Revit\Addins\20XX\FloorPatternFlattener.addin`. 
 ## Uninstall / cleanup
 
 Run **Clear Flattened Patterns** with nothing selected in every model (removes all shapes, storage data and
-overrides), then delete `FloorPatternFlattener.addin` from `%AppData%\Autodesk\Revit\Addins\20XX\`. If the add-in is
+overrides), then delete any `FPF Flat Pattern - …` materials you no longer want (Clear leaves them; they are
+harmless), then delete `FloorPatternFlattener.addin` from `%AppData%\Autodesk\Revit\Addins\20XX\`. If the add-in is
 already gone, the flat-pattern shapes can be selected with the Comments filter and deleted by hand. The
 native pattern can then be turned back on per view via *Override Graphics in View → By Element → Surface Patterns*.
 
