@@ -116,11 +116,15 @@ namespace FloorPatternFlattener.Commands
         }
 
         /// <summary>Selected flattened floors, plus source floors of any selected flat-pattern DirectShapes.</summary>
-        public static List<Floor> SelectedFlattenedFloors(UIDocument uidoc)
+        public static List<Floor> SelectedFlattenedFloors(UIDocument uidoc) =>
+            SelectedFlattenedFloors(uidoc, uidoc.Selection.GetElementIds());
+
+        /// <summary>Flattened floors among <paramref name="ids"/> (floors or their flat-pattern DirectShapes).</summary>
+        public static List<Floor> SelectedFlattenedFloors(UIDocument uidoc, IEnumerable<ElementId> ids)
         {
             var doc = uidoc.Document;
             var result = new Dictionary<ElementId, Floor>();
-            foreach (var id in uidoc.Selection.GetElementIds())
+            foreach (var id in ids)
             {
                 var el = doc.GetElement(id);
                 if (el is Floor f && FpfStorage.IsFlattened(f))

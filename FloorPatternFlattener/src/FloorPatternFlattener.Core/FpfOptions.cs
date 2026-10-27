@@ -107,5 +107,14 @@ namespace FloorPatternFlattener
 
         /// <summary>Numeric tolerance for 2D clipping (feet).</summary>
         public const double GeometryTolerance = 1.0e-9;
+    
+        /// <summary>Flatten / Edit ask for confirmation when one floor would get more modelled lines than this.</summary>
+        public const int HeavyPatternConfirmSegments = 10000;
+
+        /// <summary>View filters made by the Filter button (rules on Comments / Type Comments, visible through links).</summary>
+        public const string FilterAllName = "FPF - Flat Pattern";
+        public const string FilterForegroundName = "FPF - Flat Pattern Foreground";
+        public const string FilterBackgroundName = "FPF - Flat Pattern Background";
+        public const string FilterSurfaceName = "FPF - Flat Pattern Surface";
     }
 }
