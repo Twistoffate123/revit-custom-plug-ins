@@ -100,6 +100,17 @@ namespace FloorPatternFlattener
         public const string FilterAllName = "FPF - Flat Pattern";
         public const string FilterForegroundName = "FPF - Flat Pattern Foreground";
         public const string FilterBackgroundName = "FPF - Flat Pattern Background";
+        /// <summary>
+        /// Mark appended to the live floor's instance Comments when "Hide live floor pattern and fold lines" is on.
+        /// Bracketed so it never matches normal user text; any existing Comments are kept in front of it
+        /// ("Paving zone A [FPF Hide Live]"). The filter below uses "Comments contains" this mark, which works on
+        /// linked floors when the link is "By Host View".
+        /// </summary>
+        public const string HideLiveMark = "[FPF Hide Live]";
+
+        /// <summary>Floors filter (Comments contains <see cref="HideLiveMark"/>) that hides the live pattern.</summary>
+        public const string FilterLiveFloorName = "FPF - Live Floor (hidden pattern)";
+
         /// <summary>Legacy filter of the removed Surface style: no longer created, still deleted by "Remove everywhere".</summary>
         public const string LegacyFilterSurfaceName = "FPF - Flat Pattern Surface";
     }

@@ -34,16 +34,17 @@ namespace FloorPatternFlattener.UI
         public string Status = string.Empty;
         public bool PreviewLive;
         public bool AllowScope = true;
+        public bool HideLive;
 
         public FlattenDialogState Clone() => new FlattenDialogState
         {
             Style = Style, Placement = Placement.Clone(), Scope = Scope, Title = Title, Info = Info,
-            Status = Status, PreviewLive = PreviewLive, AllowScope = AllowScope
+            Status = Status, PreviewLive = PreviewLive, AllowScope = AllowScope, HideLive = HideLive
         };
 
         /// <summary>Same geometry-relevant settings (style, placement, scope).</summary>
         public bool SameSettings(FlattenDialogState o) =>
-            o != null && o.Style == Style && o.Scope == Scope && o.Placement.SameAs(Placement);
+            o != null && o.Style == Style && o.Scope == Scope && o.HideLive == HideLive && o.Placement.SameAs(Placement);
     }
 
     /// <summary>Modal WPF dialog built in code (no XAML, so every Revit year compiles the same file).</summary>
@@ -51,6 +52,7 @@ namespace FloorPatternFlattener.UI
     {
         private readonly FlattenDialogState _state;
         private readonly RadioButton _scopeSel, _scopeType;
+        private readonly CheckBox _hideLive;
         private readonly TextBox _angle;
         private readonly TextBlock _anchor, _status;
         public DialogAction Action { get; private set; } = DialogAction.Cancel;
@@ -113,6 +115,20 @@ namespace FloorPatternFlattener.UI
             root.Children.Add(_scopeSel);
             root.Children.Add(_scopeType);
 
+            root.Children.Add(Header("Live floor"));
+            _hideLive = new CheckBox
+            {
+                IsChecked = state.HideLive, Margin = new Thickness(0, 2, 0, 2),
+                Content = new TextBlock
+                {
+                    TextWrapping = TextWrapping.Wrap,
+                    Text = "Hide live floor pattern and fold lines (marks the floor's Comments with \"" +
+                           FpfOptions.HideLiveMark + "\"; the \"" + FpfOptions.FilterLiveFloorName +
+                           "\" filter from the Filters button does the hiding, also through links)"
+                }
+            };
+            root.Children.Add(_hideLive);
+
             _status = Text(state.Status, true);
             _status.Margin = new Thickness(0, 10, 0, 0);
             root.Children.Add(_status);
@@ -159,6 +175,7 @@ namespace FloorPatternFlattener.UI
                 var shown = (_state.Placement.NormalizedAngle * 180.0 / Math.PI).ToString("0.###", CultureInfo.InvariantCulture);
                 if (_angle.Text.Trim() != shown) _state.Placement.AngleDeg = deg;
                 _state.Style = FlattenStyle.Lines;
+                _state.HideLive = _hideLive.IsChecked == true;
                 _state.Scope = _scopeType.IsChecked == true ? ApplyScope.AllVisibleOfType : ApplyScope.SelectedFloors;
             }
             Action = action;

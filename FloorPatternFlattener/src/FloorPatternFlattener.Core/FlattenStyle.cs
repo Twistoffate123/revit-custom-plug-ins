@@ -57,6 +57,29 @@ namespace FloorPatternFlattener
         }
     }
 
+    /// <summary>Remembers the last "Hide live floor pattern and fold lines" choice for new Flatten runs.</summary>
+    internal static class LastHideLiveSetting
+    {
+        private static string FilePath => Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "FloorPatternFlattener", "hide-live.txt");
+
+        public static bool Load()
+        {
+            try { return File.Exists(FilePath) && File.ReadAllText(FilePath).Trim() == "on"; }
+            catch { return false; }
+        }
+
+        public static void Save(bool on)
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(FilePath));
+                File.WriteAllText(FilePath, on ? "on" : "off");
+            }
+            catch { /* not critical */ }
+        }
+    }
+
     /// <summary>"Auto: On / Off" ribbon switch (per Windows user, remembered between sessions). Default On.</summary>
     public static class AutoUpdateSetting
     {

@@ -118,13 +118,14 @@ namespace FloorPatternFlattener.Commands
 
             var style = _state.Style;
             var placement = _state.Placement.Clone();
+            var hideLive = _state.HideLive;
             var ok = CommandSupport.RunTransaction(_doc, "Flatten Floor Patterns", _report, () =>
             {
                 var svc = new FlatPatternService(_doc, _report, canEdit);
                 foreach (var f in floors)
                 {
                     if (!f.IsValidObject) continue;
-                    svc.Apply(f, ApplyMode.IfChanged, true, style, placement);
+                    svc.Apply(f, ApplyMode.IfChanged, true, style, placement, hideLive);
                     if (svc.LastFloorSegments > _maxFloorSegments)
                     {
                         _maxFloorSegments = svc.LastFloorSegments;
@@ -182,8 +183,11 @@ namespace FloorPatternFlattener.Commands
             }
 
             LastStyleSetting.Save(_state.Style);
+            LastHideLiveSetting.Save(_state.HideLive);
             var hint = "Control the lines with a view filter (Filter button) using Projection Lines; in a sheet file " +
-                       "set the link to \"By Host View\" so its filters apply.";
+                       "set the link to \"By Host View\" so its filters apply." +
+                       (_state.HideLive ? "\n\nLive pattern hiding: run Flat Pattern Filters in the sheet file (adds \"" +
+                                          FpfOptions.FilterLiveFloorName + "\" with its overrides; tick the fold-lines option)." : "");
             CommandSupport.Show(_state.Title, report,
                 Summary() + "\nPlacement: " + _state.Placement.Describe() + ".\nEach floor keeps its style, rotation and " +
                 "anchor for Refresh, Update and automatic rebuilds.\n\n" + hint);

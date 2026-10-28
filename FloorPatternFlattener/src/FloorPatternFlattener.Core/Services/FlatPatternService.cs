@@ -57,9 +57,23 @@ namespace FloorPatternFlattener.Services
         /// Returns true if the model was modified.
         /// </summary>
         public bool Apply(Floor floor, ApplyMode mode, bool applyViewGraphics, FlattenStyle? requestedStyle = null,
-            PatternPlacement requestedPlacement = null)
+            PatternPlacement requestedPlacement = null, bool? requestedHideLive = null)
         {
             if (floor == null || !floor.IsValidObject) return false;
+
+            // "Hide live floor pattern and fold lines": a mark in the floor's Comments that the
+            // "FPF - Live Floor (hidden pattern)" view filter keys on (works through links, "By Host View").
+            var markChanged = false;
+            if (requestedHideLive.HasValue && FpfStorage.ReadHideLive(floor) != requestedHideLive.Value)
+            {
+                if (CanEdit(floor.Id))
+                {
+                    try { markChanged = FpfStorage.WriteHideLive(floor, requestedHideLive.Value); }
+                    catch (Exception ex) { _report.Errors.Add(FpfReport.Describe(floor) + ": Comments mark - " + ex.Message); }
+                    if (markChanged) _report.HideLiveChanged++;
+                }
+                else _report.AddNotEditable(floor, "floor not editable (hide live pattern mark)");
+            }
 
             var link = FpfStorage.ReadFloor(floor) ?? new FloorLinkData();
             var wasFlattened = link.Flattened;
@@ -100,7 +114,7 @@ namespace FloorPatternFlattener.Services
                     SyncNativePatterns(floor.Id);
                     HideShapesInSectionViews(existing);
                 }
-                return applyViewGraphics || touched;
+                return applyViewGraphics || touched || markChanged;
             }
 
             // ---- editability (worksharing)
@@ -458,6 +472,7 @@ namespace FloorPatternFlattener.Services
             FpfStorage.DeleteFloor(floor);
             FpfStorage.DeleteStyle(floor);
             FpfStorage.DeletePlacement(floor);
+            try { FpfStorage.WriteHideLive(floor, false); } catch { /* ignore */ }
             InvalidateShapeIndex();
 
             var id = floor.Id;

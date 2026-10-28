@@ -250,3 +250,18 @@ MIT, see [LICENSE](LICENSE).
 ## Disclaimer
 
 Provided as-is, not an Autodesk product. Validate visual output and print sets before issuing drawings.
+
+## Hide live floor pattern and fold lines
+
+Flatten and Edit Flattened Pattern have the option **Hide live floor pattern and fold lines**. When it is on, the tool adds the mark `[FPF Hide Live]` to the end of the floor's instance **Comments** and keeps any text that was already there. When it is off, or when you use Clear, only the mark is removed. Refresh and Auto-update leave the mark as it is.
+
+**Flat Pattern Filters** (Add to all view templates / Add to the active view) creates **FPF - Live Floor (hidden pattern)**:
+- It applies to Floors where Comments contains `[FPF Hide Live]`.
+- It is added with overrides that hide the surface and cut foreground and background patterns.
+- It works in plan, 3D and other views, and in templates.
+- It also works through links set to "By Host View".
+
+If you tick the dialog's checkbox, the tool also turns off **Floors > Interior Edges** (the fold lines) in the same views and templates:
+- This affects all floors in those views.
+- Floor outlines stay visible.
+- **Remove everywhere** deletes the filter but does not turn Interior Edges back on.

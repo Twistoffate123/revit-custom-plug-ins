@@ -227,6 +227,46 @@ namespace FloorPatternFlattener.Storage
             return FlattenStyle.Lines;
         }
 
+        // ------------------------------------------------------------ hide-live mark (instance Comments)
+
+        /// <summary>True if the floor's Comments carry <see cref="FpfOptions.HideLiveMark"/>.</summary>
+        public static bool ReadHideLive(Element floor)
+        {
+            try
+            {
+                var p = floor?.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS);
+                var t = p?.AsString();
+                return t != null && t.IndexOf(FpfOptions.HideLiveMark, StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// Adds or removes the mark, keeping the user's own Comments text. Returns true if the parameter changed.
+        /// </summary>
+        public static bool WriteHideLive(Element floor, bool on)
+        {
+            var p = floor?.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS);
+            if (p == null || p.IsReadOnly) return false;
+            var t = p.AsString() ?? string.Empty;
+            var has = t.IndexOf(FpfOptions.HideLiveMark, StringComparison.OrdinalIgnoreCase) >= 0;
+            if (has == on) return false;
+            string n;
+            if (on)
+            {
+                n = string.IsNullOrWhiteSpace(t) ? FpfOptions.HideLiveMark : t.TrimEnd() + " " + FpfOptions.HideLiveMark;
+            }
+            else
+            {
+                n = t;
+                int i;
+                while ((i = n.IndexOf(FpfOptions.HideLiveMark, StringComparison.OrdinalIgnoreCase)) >= 0)
+                    n = n.Remove(i, FpfOptions.HideLiveMark.Length);
+                n = n.Replace("  ", " ").Trim();
+            }
+            return p.Set(n);
+        }
+
         /// <summary>
         /// True if the floor was flattened with the removed "Surface" style (stored text "Surface" or "1").
         /// Such floors are rebuilt as Lines and their old surface shape is deleted.

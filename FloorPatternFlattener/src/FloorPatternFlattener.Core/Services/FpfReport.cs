@@ -23,6 +23,9 @@ namespace FloorPatternFlattener.Services
         /// <summary>Floors that were flattened with the removed Surface style and were rebuilt as Lines.</summary>
         public int LegacySurfaceReplaced;
 
+        /// <summary>Floors whose "hide live pattern" Comments mark was added or removed.</summary>
+        public int HideLiveChanged;
+
         public List<string> NotEditable { get; } = new List<string>();
         public List<ElementId> NotEditableIds { get; } = new List<ElementId>();
         public List<string> Truncated { get; } = new List<string>();
@@ -59,6 +62,8 @@ namespace FloorPatternFlattener.Services
             if (Cleared > 0) sb.AppendLine("Cleared: " + Cleared);
             if (Segments > 0) sb.AppendLine("Hatch line segments written: " + Segments +
                                             (BackgroundSegments > 0 ? " (background pattern: " + BackgroundSegments + ")" : ""));
+            if (HideLiveChanged > 0)
+                sb.AppendLine("Live floor \"hide pattern\" mark changed on: " + HideLiveChanged + " floor(s)");
             if (LegacySurfaceReplaced > 0)
                 sb.AppendLine("Old Surface-style flat patterns replaced by Lines: " + LegacySurfaceReplaced);
             if (OrphansDeleted > 0) sb.AppendLine("Orphaned flat-pattern shapes removed: " + OrphansDeleted);
