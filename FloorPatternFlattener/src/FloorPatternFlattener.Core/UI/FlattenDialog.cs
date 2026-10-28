@@ -50,7 +50,7 @@ namespace FloorPatternFlattener.UI
     public sealed class FlattenDialog : Window
     {
         private readonly FlattenDialogState _state;
-        private readonly RadioButton _lines, _surface, _scopeSel, _scopeType;
+        private readonly RadioButton _scopeSel, _scopeType;
         private readonly TextBox _angle;
         private readonly TextBlock _anchor, _status;
         public DialogAction Action { get; private set; } = DialogAction.Cancel;
@@ -59,35 +59,33 @@ namespace FloorPatternFlattener.UI
         {
             _state = state;
             Title = state.Title;
-            Width = 470;
-            SizeToContent = SizeToContent.Height;
-            ResizeMode = ResizeMode.NoResize;
+            Width = 520;
+            MinWidth = 380;
+            MinHeight = 300;
+            SizeToContent = SizeToContent.Height; // initial height only; user resizing turns this off
+            ResizeMode = ResizeMode.CanResizeWithGrip;
             WindowStartupLocation = WindowStartupLocation.Manual;
             Left = 40;
             Top = 120;
             ShowInTaskbar = false;
             if (owner != IntPtr.Zero) new WindowInteropHelper(this).Owner = owner;
 
-            var root = new StackPanel { Margin = new Thickness(12) };
-            Content = root;
+            // Layout: action buttons docked at the bottom, everything else in a scrollable panel that stretches
+            // with the window (horizontally and vertically).
+            var dock = new DockPanel { LastChildFill = true };
+            Content = dock;
+            var root = new StackPanel { Margin = new Thickness(12, 12, 12, 0) };
 
             if (!string.IsNullOrEmpty(state.Info))
                 root.Children.Add(Text(state.Info, true));
 
-            root.Children.Add(Header("Style"));
-            _lines = new RadioButton { GroupName = "style", Content = Wrap("Lines - exact match of the live pattern as model lines; filters control the lines.") };
-            _surface = new RadioButton { GroupName = "style", Content = Wrap("Surface - thin surface with the floor's material patterns; filters control the pattern (Surface Patterns), Align works.") };
-            _lines.IsChecked = state.Style == FlattenStyle.Lines;
-            _surface.IsChecked = state.Style == FlattenStyle.Surface;
-            root.Children.Add(_lines);
-            root.Children.Add(_surface);
-
             root.Children.Add(Header("Rotate / align"));
-            var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
-            row.Children.Add(new TextBlock { Text = "Angle (deg, anticlockwise):", VerticalAlignment = VerticalAlignment.Center });
+            // WrapPanel: the buttons flow onto the next line when the window is narrow, so none is cut off.
+            var row = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
+            row.Children.Add(new TextBlock { Text = "Angle (deg, anticlockwise):", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 2, 0, 2) });
             _angle = new TextBox
             {
-                Width = 70, Margin = new Thickness(6, 0, 6, 0),
+                Width = 70, Margin = new Thickness(6, 2, 6, 2), VerticalAlignment = VerticalAlignment.Center,
                 Text = (state.Placement.NormalizedAngle * 180.0 / Math.PI).ToString("0.###", CultureInfo.InvariantCulture)
             };
             row.Children.Add(_angle);
@@ -102,7 +100,7 @@ namespace FloorPatternFlattener.UI
                 UpdateAnchor();
             }, "Back to the live floor's pattern: no rotation, project origin."));
             root.Children.Add(row);
-            _anchor = Text(string.Empty, false);
+            _anchor = Text(string.Empty, true);
             root.Children.Add(_anchor);
             UpdateAnchor();
 
@@ -119,10 +117,10 @@ namespace FloorPatternFlattener.UI
             _status.Margin = new Thickness(0, 10, 0, 0);
             root.Children.Add(_status);
 
-            var buttons = new StackPanel
+            var buttons = new WrapPanel
             {
                 Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right,
-                Margin = new Thickness(0, 12, 0, 0)
+                Margin = new Thickness(12, 8, 20, 12) // right margin leaves room for the resize grip
             };
             buttons.Children.Add(Button(state.PreviewLive ? "Update Preview" : "Preview", () => Close(DialogAction.Preview),
                 "Build the result temporarily and show it in the view; nothing is kept until Apply."));
@@ -130,7 +128,14 @@ namespace FloorPatternFlattener.UI
             buttons.Children.Add(Button(state.PreviewLive ? "Discard" : "Cancel",
                 () => Close(state.PreviewLive ? DialogAction.Discard : DialogAction.Cancel),
                 "Close without changing the model (a live preview is rolled back)."));
-            root.Children.Add(buttons);
+            DockPanel.SetDock(buttons, Dock.Bottom);
+            dock.Children.Add(buttons);
+            dock.Children.Add(new ScrollViewer
+            {
+                Content = root,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
+            });
         }
 
         private void UpdateAnchor()
@@ -153,7 +158,7 @@ namespace FloorPatternFlattener.UI
                 // Keep the exact picked angle if the box still shows it (rounded display).
                 var shown = (_state.Placement.NormalizedAngle * 180.0 / Math.PI).ToString("0.###", CultureInfo.InvariantCulture);
                 if (_angle.Text.Trim() != shown) _state.Placement.AngleDeg = deg;
-                _state.Style = _surface.IsChecked == true ? FlattenStyle.Surface : FlattenStyle.Lines;
+                _state.Style = FlattenStyle.Lines;
                 _state.Scope = _scopeType.IsChecked == true ? ApplyScope.AllVisibleOfType : ApplyScope.SelectedFloors;
             }
             Action = action;
@@ -166,11 +171,9 @@ namespace FloorPatternFlattener.UI
         private static TextBlock Text(string t, bool wrap) =>
             new TextBlock { Text = t, TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap, Margin = new Thickness(0, 2, 0, 2) };
 
-        private static TextBlock Wrap(string t) => new TextBlock { Text = t, TextWrapping = TextWrapping.Wrap, Width = 410 };
-
         private static Button Button(string text, Action onClick, string tip)
         {
-            var b = new Button { Content = text, Margin = new Thickness(4, 0, 0, 0), Padding = new Thickness(8, 2, 8, 2), ToolTip = tip };
+            var b = new Button { Content = text, Margin = new Thickness(4, 2, 0, 2), Padding = new Thickness(8, 2, 8, 2), ToolTip = tip };
             b.Click += (s, e) => onClick();
             return b;
         }
@@ -187,13 +190,14 @@ namespace FloorPatternFlattener.UI
         {
             Title = title;
             Width = 380;
+            MinWidth = 300;
             SizeToContent = SizeToContent.Height;
-            ResizeMode = ResizeMode.NoResize;
+            ResizeMode = ResizeMode.CanResizeWithGrip;
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
             ShowInTaskbar = false;
             if (owner != IntPtr.Zero) new WindowInteropHelper(this).Owner = owner;
             var root = new StackPanel { Margin = new Thickness(12) };
-            _text = new TextBlock { Margin = new Thickness(0, 0, 0, 6) };
+            _text = new TextBlock { Margin = new Thickness(0, 0, 0, 6), TextWrapping = TextWrapping.Wrap };
             _bar = new ProgressBar { Height = 16, Minimum = 0, Maximum = Math.Max(1, max) };
             var cancel = new Button { Content = "Cancel", HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 8, 0, 0), Padding = new Thickness(10, 2, 10, 2) };
             cancel.Click += (s, e) => { Cancelled = true; _text.Text = "Cancelling after the current floor..."; };

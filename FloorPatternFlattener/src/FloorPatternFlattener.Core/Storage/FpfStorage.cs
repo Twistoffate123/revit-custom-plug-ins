@@ -227,6 +227,28 @@ namespace FloorPatternFlattener.Storage
             return FlattenStyle.Lines;
         }
 
+        /// <summary>
+        /// True if the floor was flattened with the removed "Surface" style (stored text "Surface" or "1").
+        /// Such floors are rebuilt as Lines and their old surface shape is deleted.
+        /// </summary>
+        public static bool HasLegacySurfaceStyle(Element floor)
+        {
+            if (floor == null) return false;
+            var schema = Schema.Lookup(FloorStyleSchemaGuid);
+            if (schema == null) return false;
+            try
+            {
+                var e = floor.GetEntity(schema);
+                if (e == null || !e.IsValid()) return false;
+                var text = (e.Get<string>(FStyle) ?? string.Empty).Trim();
+                return string.Equals(text, "Surface", StringComparison.OrdinalIgnoreCase) || text == "1";
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         public static void WriteStyle(Element floor, FlattenStyle style)
         {
             var e = new Entity(FloorStyleSchema);

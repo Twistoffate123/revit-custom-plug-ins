@@ -7,10 +7,10 @@ namespace FloorPatternFlattener
     public enum FlattenStyle
     {
         /// <summary>Hatch drawn as model lines at the live pattern's exact positions (plan-true on slopes).</summary>
-        Lines = 0,
+        Lines = 0
 
-        /// <summary>Thin flat surface with a copy of the floor's material patterns; filters control the pattern.</summary>
-        Surface = 1
+        // 1 was "Surface" (removed). Floors still storing it read back as Lines and are rebuilt as Lines;
+        // see FpfStorage.HasLegacySurfaceStyle.
     }
 
     /// <summary>Remembers the last style chosen in the Flatten dialog (per Windows user, all Revit years).</summary>

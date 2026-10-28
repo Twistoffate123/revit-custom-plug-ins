@@ -54,19 +54,15 @@ namespace FloorPatternFlattener.Ribbon
                 "FloorPatternFlattener.Commands.CommandFlattenFloorPatterns")
             {
                 ToolTip = "Add a permanent flat copy of the selected floors' surface patterns (foreground and background). " +
-                          "Dialog: style Lines (exact match, filters control the lines) or Surface (filters control the " +
-                          "pattern), angle, Align to Edge / Line, Clear, scope (selected / all visible of this type), " +
+                          "They are drawn as model lines at the live pattern's exact positions; view filters control them. " +
+                          "Dialog: angle, Align to Edge / Line, Clear, scope (selected / all visible of this type), " +
                           "Preview, Apply, Discard. The live floor pattern is left as it is.",
                 LongDescription =
-                    "Lines: the material's fill pattern is generated in plan (aligned to the project internal origin), " +
+                    "The material's fill pattern is generated in plan (aligned to the project internal origin), " +
                     "projected onto every top face and stored as pinned Generic Model lines (Comments = \"" +
                     FpfOptions.CommentsTag + "\", types \"" + FpfOptions.ForegroundTypeName + "\" / \"" +
                     FpfOptions.BackgroundTypeName + "\"); filters control Projection Lines.\n" +
-                    "Surface: a 1.5 mm Generic Model surface on the floor's top faces (type \"" + FpfOptions.SurfaceTypeName +
-                    "\") with material \"" + FpfOptions.SurfaceMaterialPrefix + "<floor material>\" copying its surface " +
-                    "patterns and colours, so filters' Surface Patterns overrides and the Align tool work on it; alignment " +
-                    "to the live pattern is best effort.\n" +
-                    "Each floor remembers its style; the flat pattern is saved with the model and regenerates " +
+                    "Each floor remembers its rotation and anchor; the flat pattern is saved with the model and regenerates " +
                     "automatically when the floor, its type, material or fill pattern changes."
             });
 
@@ -76,10 +72,10 @@ namespace FloorPatternFlattener.Ribbon
                 asm,
                 "FloorPatternFlattener.Commands.CommandEditFlattenedPattern")
             {
-                ToolTip = "Re-open a flattened floor with its stored style, rotation and anchor. Preview, then Apply to " +
+                ToolTip = "Re-open a flattened floor with its stored rotation and anchor. Preview, then Apply to " +
                           "replace its flat pattern or Discard to keep the current one.",
                 LongDescription = "Select or pick a flattened floor (or its flat pattern). The same dialog as Flatten: " +
-                                  "style, angle, Align to Edge / Line, Clear, scope, Preview."
+                                  "angle, Align to Edge / Line, Clear, scope, Preview."
             });
 
             panel.AddItem(new PushButtonData(
@@ -90,7 +86,7 @@ namespace FloorPatternFlattener.Ribbon
             {
                 ToolTip = "Rebuild the selected flattened floors, one picked floor or all of them, with progress, Cancel " +
                           "and a summary. Use it when Auto is Off.",
-                LongDescription = "Each floor is rebuilt with its stored style, rotation and anchor (one undo step)."
+                LongDescription = "Each floor is rebuilt with its stored rotation and anchor (one undo step)."
             });
 
             _autoButton = panel.AddItem(new PushButtonData(
@@ -112,8 +108,8 @@ namespace FloorPatternFlattener.Ribbon
                 asm,
                 "FloorPatternFlattener.Commands.CommandFpfFilters")
             {
-                ToolTip = "Create the ready-made view filters (" + FpfOptions.FilterAllName + ", Foreground, Background, " +
-                          "Surface) and add them to all view templates or the active view, or remove them everywhere.",
+                ToolTip = "Create the ready-made view filters (" + FpfOptions.FilterAllName + ", Foreground, Background) " +
+                          "and add them to all view templates or the active view, or remove them everywhere.",
                 LongDescription = "Rules use Comments / Type Comments of Generic Models, so the filters also work on " +
                                   "linked models whose display is \"By Host View\": run this in your sheet file. " +
                                   "Filters are added with no overrides; set them in Visibility/Graphics."
@@ -139,13 +135,12 @@ namespace FloorPatternFlattener.Ribbon
                 asm,
                 "FloorPatternFlattener.Commands.CommandRefreshFlattenedPatterns")
             {
-                ToolTip = "Force-regenerate the flat patterns of all flattened floors in this document (each in its own " +
-                          "Lines or Surface style).",
+                ToolTip = "Force-regenerate the flat patterns of all flattened floors in this document. Floors " +
+                          "flattened with the old Surface style are rebuilt as lines.",
                 LongDescription =
                     "Useful after the model was edited without the add-in, after an add-in upgrade, or when some " +
                     "elements were skipped because they were not editable (worksharing). Also re-applies view overrides " +
-                    "and removes orphaned flat-pattern shapes. Surface floors are only rebuilt when out of date, so a " +
-                    "manual Align of their pattern is kept."
+                    "and removes orphaned flat-pattern shapes."
             });
         }
 

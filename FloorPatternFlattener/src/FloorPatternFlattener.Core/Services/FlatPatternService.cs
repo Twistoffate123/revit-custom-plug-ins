@@ -65,6 +65,9 @@ namespace FloorPatternFlattener.Services
             var wasFlattened = link.Flattened;
             var storedStyle = FpfStorage.ReadStyle(floor);
             var style = requestedStyle ?? storedStyle;
+            // Floors flattened with the removed Surface style: always rebuild as Lines and drop the old surface shape.
+            var legacySurface = FpfStorage.HasLegacySurfaceStyle(floor);
+            if (legacySurface && mode != ApplyMode.Force) mode = ApplyMode.Force;
             var storedPlacement = FpfStorage.ReadPlacement(floor);
             var placement = requestedPlacement ?? storedPlacement;
             var placementChanged = !placement.SameAs(storedPlacement);
@@ -92,9 +95,6 @@ namespace FloorPatternFlattener.Services
             {
                 _report.Unchanged++;
                 var touched = false;
-                // Surface mode: keep the FPF material copies in sync with shading-only edits of the source material
-                // (pattern edits change the signature and rebuild anyway).
-                if (style == FlattenStyle.Surface && CanEdit(floor.Id)) touched = SyncSurfaceMaterials(input, placement);
                 if (applyViewGraphics)
                 {
                     SyncNativePatterns(floor.Id);
@@ -121,11 +121,22 @@ namespace FloorPatternFlattener.Services
             if (input.Pieces.Count == 0) _report.NoTopFace.Add(FpfReport.Describe(floor));
             _report.NonPlanarFaces += input.NonPlanarFaces;
 
+            if (legacySurface)
+            {
+                // The old surface DirectShape (type "FPF Flat Pattern - Surface") is not reused: delete it so the
+                // Lines rebuild starts clean with fresh shapes.
+                foreach (var ds in existing)
+                {
+                    try { _doc.Delete(ds.Id); }
+                    catch { /* ignore */ }
+                }
+                existing = new List<DirectShape>();
+                _report.LegacySurfaceReplaced++;
+            }
+
             var shapes = new List<DirectShape>();
             var created = new List<DirectShape>();
-            var count = style == FlattenStyle.Surface
-                ? BuildSurfaceShapes(floor, input, existing, shapes, created)
-                : BuildLineShapes(floor, input, existing, shapes, created);
+            var count = BuildLineShapes(floor, input, existing, shapes, created);
 
             for (var i = count; i < existing.Count; i++)
             {
@@ -134,7 +145,7 @@ namespace FloorPatternFlattener.Services
             }
 
             // ---- floor link (written last; signature guards the updater against re-trigger loops)
-            if (style != storedStyle) FpfStorage.WriteStyle(floor, style);
+            if (style != storedStyle || legacySurface) FpfStorage.WriteStyle(floor, style);
             if (placementChanged) FpfStorage.WritePlacement(floor, placement);
             link.Flattened = true;
             link.Version = FpfOptions.SchemaDataVersion;
@@ -146,8 +157,7 @@ namespace FloorPatternFlattener.Services
 
             if (wasFlattened) _report.Updated++;
             else _report.Created++;
-            if (style == FlattenStyle.Surface) _report.SurfaceFloors++;
-            else _report.LineFloors++;
+            _report.LineFloors++;
 
             // ---- view graphics (full pass for new floors, copied floors and recreated shapes)
             if (applyViewGraphics || !wasFlattened || !linksOk)
@@ -164,15 +174,11 @@ namespace FloorPatternFlattener.Services
         }
 
         /// <summary>
-        /// Lines keep the original signature (no rebuild of existing floors after the upgrade); Surface adds a suffix
-        /// so switching style always rebuilds.
+        /// Lines keep the original signature (no rebuild of existing floors after the upgrade).
         /// </summary>
         private static string EffectiveSignature(string inputSignature, FlattenStyle style, PatternPlacement placement)
         {
-            var sig = style == FlattenStyle.Surface
-                ? inputSignature + "|surface" + FpfOptions.SurfaceAlgorithmVersion + "|T" +
-                  PatternReader.F(FpfOptions.SurfaceThicknessFeet)
-                : inputSignature;
+            var sig = inputSignature;
             // Identity adds nothing, so floors flattened before rotation existed are not rebuilt.
             if (placement != null && !placement.IsIdentity) sig += "|P" + placement.ToStorage();
             return sig;
@@ -286,112 +292,6 @@ namespace FloorPatternFlattener.Services
             return shapes.Count;
         }
 
-        // ------------------------------------------------------------ surface mode
-
-        /// <summary>
-        /// Surface mode: one DirectShape holding a thin solid per top face, extruded from the face along its normal
-        /// (<see cref="FpfOptions.SurfaceThicknessFeet"/>), with the face's material copied as
-        /// "FPF Flat Pattern - &lt;material&gt;" (same surface foreground / background patterns and colours). The top
-        /// face of the solid is parallel to the floor face and built in project coordinates, so Revit lays the model
-        /// pattern out the same way it does on the floor. Returns the number of shapes used (0 or 1).
-        /// </summary>
-        private int BuildSurfaceShapes(Floor floor, FloorHatchInput input, List<DirectShape> existing,
-            List<DirectShape> shapes, List<DirectShape> created)
-        {
-            var styleId = _styles.GetSurfaceStyleId();
-            var solids = new List<GeometryObject>();
-            var noPattern = false;
-            var skipped = 0;
-            var materialsChanged = false;
-
-            foreach (var piece in input.Pieces)
-            {
-                if (piece.Pattern != null && piece.Pattern.IsDefaultGrid) noPattern = true;
-                var matId = _styles.GetSurfaceMaterialId(piece.Pattern?.MaterialId, _currentPlacement, ref materialsChanged);
-                var solid = MakeSurfaceSolid(piece, matId, styleId) ??
-                            (styleId != ElementId.InvalidElementId ? MakeSurfaceSolid(piece, matId, ElementId.InvalidElementId) : null);
-                if (solid == null) { skipped++; continue; }
-                solids.Add(solid);
-            }
-
-            if (noPattern) _report.SurfaceNoPattern.Add(FpfReport.Describe(floor));
-            _report.SurfaceFacesSkipped += skipped;
-            if (solids.Count == 0)
-            {
-                if (input.Pieces.Count > 0)
-                    _report.Errors.Add(FpfReport.Describe(floor) + ": no flat surface could be built from its top faces.");
-                return 0;
-            }
-
-            var ds = ShapeAt(floor, existing, created, 0);
-            if (ds == null) return 0;
-            try
-            {
-                ds.SetShape(solids);
-            }
-            catch (Exception ex)
-            {
-                _report.Errors.Add(FpfReport.Describe(floor) + ": SetShape (surface) failed - " + ex.Message);
-            }
-
-            ConfigureShape(ds, floor, 0, 1, _styles.GetSurfaceTypeId(), "Surface");
-            shapes.Add(ds);
-            _report.SurfaceFaces += solids.Count;
-            return 1;
-        }
-
-        private static Solid MakeSurfaceSolid(TopPiece piece, ElementId materialId, ElementId styleId)
-        {
-            if (piece.Loops == null || piece.Loops.Count == 0) return null;
-            var dir = new XYZ(piece.Nx, piece.Ny, piece.Nz);
-            SolidOptions opts;
-            try
-            {
-                opts = new SolidOptions(materialId ?? ElementId.InvalidElementId, styleId ?? ElementId.InvalidElementId);
-            }
-            catch
-            {
-                return null;
-            }
-
-            try
-            {
-                var s = GeometryCreationUtilities.CreateExtrusionGeometry(piece.Loops, dir, FpfOptions.SurfaceThicknessFeet, opts);
-                if (s != null && s.Volume > 0) return s;
-            }
-            catch
-            {
-                // try the opposite loop orientation below
-            }
-
-            try
-            {
-                var flipped = new List<CurveLoop>();
-                foreach (var l in piece.Loops)
-                {
-                    var c = CurveLoop.CreateViaCopy(l);
-                    c.Flip();
-                    flipped.Add(c);
-                }
-                var s = GeometryCreationUtilities.CreateExtrusionGeometry(flipped, dir, FpfOptions.SurfaceThicknessFeet, opts);
-                if (s != null && s.Volume > 0) return s;
-            }
-            catch
-            {
-                // give up on this face
-            }
-            return null;
-        }
-
-        /// <summary>Surface mode: re-syncs the FPF material copies used by the floor; true if any changed.</summary>
-        private bool SyncSurfaceMaterials(FloorHatchInput input, PatternPlacement placement)
-        {
-            var changed = false;
-            foreach (var p in input.Pieces)
-                _styles.GetSurfaceMaterialId(p.Pattern?.MaterialId, placement, ref changed);
-            return changed;
-        }
-
         private DirectShape CreateShape()
         {
             var cat = new ElementId(BuiltInCategory.OST_GenericModel);
@@ -420,7 +320,7 @@ namespace FloorPatternFlattener.Services
             string label)
         {
             // Type per layer / mode: lets view filters target "Type Name" / "Type Comments" =
-            // FPF Flat Pattern - Foreground / Background / Surface.
+            // FPF Flat Pattern - Foreground / Background.
             try
             {
                 if (typeId != ElementId.InvalidElementId && ds.GetTypeId() != typeId) ds.SetTypeId(typeId);

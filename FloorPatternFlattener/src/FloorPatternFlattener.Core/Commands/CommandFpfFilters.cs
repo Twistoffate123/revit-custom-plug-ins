@@ -21,9 +21,11 @@ namespace FloorPatternFlattener.Commands
         {
             (FpfOptions.FilterAllName, BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS, FpfOptions.CommentsTag),
             (FpfOptions.FilterForegroundName, BuiltInParameter.ALL_MODEL_TYPE_COMMENTS, FpfOptions.ForegroundTypeName),
-            (FpfOptions.FilterBackgroundName, BuiltInParameter.ALL_MODEL_TYPE_COMMENTS, FpfOptions.BackgroundTypeName),
-            (FpfOptions.FilterSurfaceName, BuiltInParameter.ALL_MODEL_TYPE_COMMENTS, FpfOptions.SurfaceTypeName)
+            (FpfOptions.FilterBackgroundName, BuiltInParameter.ALL_MODEL_TYPE_COMMENTS, FpfOptions.BackgroundTypeName)
         };
+
+        /// <summary>Old FPF filters that are no longer created but are still removed by "Remove everywhere".</summary>
+        private static readonly string[] LegacyNames = { FpfOptions.LegacyFilterSurfaceName };
 
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
@@ -58,7 +60,9 @@ namespace FloorPatternFlattener.Commands
                 {
                     if (choice == TaskDialogResult.CommandLink3)
                     {
-                        var ids = ExistingFilters(doc).Where(p => Definitions.Any(d => d.Name == p.Key)).Select(p => p.Value.Id).ToList();
+                        var ids = ExistingFilters(doc)
+                            .Where(p => Definitions.Any(d => d.Name == p.Key) ||
+                                        LegacyNames.Any(n => string.Equals(n, p.Key, StringComparison.OrdinalIgnoreCase))).Select(p => p.Value.Id).ToList();
                         if (ids.Count > 0) doc.Delete(ids);
                         summary = ids.Count + " FPF filter(s) removed.";
                         return;

@@ -107,7 +107,7 @@ namespace FloorPatternFlattener.Commands
             _maxFloor = string.Empty;
             _floorCount = floors.Count;
 
-            _group = new TransactionGroup(_doc, "Flatten Floor Patterns (" + _state.Style + ")");
+            _group = new TransactionGroup(_doc, "Flatten Floor Patterns");
             if (_group.Start() != TransactionStatus.Started)
             {
                 _group.Dispose();
@@ -148,9 +148,6 @@ namespace FloorPatternFlattener.Commands
 
         private string Summary()
         {
-            if (_state.Style == FlattenStyle.Surface)
-                return _floorCount + " floor(s), " + _report.SurfaceFaces + " surface face(s)" +
-                       (_report.SurfaceNoPattern.Count > 0 ? ", " + _report.SurfaceNoPattern.Count + " without a pattern" : "");
             return _floorCount + " floor(s), " + _report.Segments.ToString("N0") + " lines" +
                    (_maxFloorSegments > FpfOptions.HeavyPatternConfirmSegments
                        ? " - heavy: " + _maxFloor + " has " + _maxFloorSegments.ToString("N0") + " lines"
@@ -165,7 +162,7 @@ namespace FloorPatternFlattener.Commands
                 MainInstruction = _maxFloor + " gets " + _maxFloorSegments.ToString("N0") + " lines.",
                 MainContent = "More than " + FpfOptions.HeavyPatternConfirmSegments.ToString("N0") +
                               " modelled lines on one floor slow down views and file size. Is modelled geometry really " +
-                              "needed here? (A coarser pattern or the Surface style is lighter.)",
+                              "needed here? (A coarser pattern is lighter.)",
                 CommonButtons = TaskDialogCommonButtons.Yes | TaskDialogCommonButtons.No,
                 DefaultButton = TaskDialogResult.No
             };
@@ -185,11 +182,9 @@ namespace FloorPatternFlattener.Commands
             }
 
             LastStyleSetting.Save(_state.Style);
-            var hint = _state.Style == FlattenStyle.Surface
-                ? "Surface: control the pattern with a view filter (Filter button) using Surface Patterns overrides; " +
-                  "use Align on the surface if it is offset from the live floor."
-                : "Lines: control them with a view filter (Filter button) using Projection Lines.";
-            CommandSupport.Show(_state.Title + " - " + _state.Style, report,
+            var hint = "Control the lines with a view filter (Filter button) using Projection Lines; in a sheet file " +
+                       "set the link to \"By Host View\" so its filters apply.";
+            CommandSupport.Show(_state.Title, report,
                 Summary() + "\nPlacement: " + _state.Placement.Describe() + ".\nEach floor keeps its style, rotation and " +
                 "anchor for Refresh, Update and automatic rebuilds.\n\n" + hint);
             return Result.Succeeded;
