@@ -169,10 +169,10 @@ namespace FloorPatternFlattener.Commands
             LastStyleSetting.Save(_state.Style);
             LastHideLiveSetting.Save(_state.HideLive);
             var hint = "Control the hatch with a view filter (Filter button) using Projection Lines. " +
-                       "Each hatch line and each floor-edge segment is its own Generic Model element (for Align refs and deleting one edge). " +
-                       "The flat pattern is also placed in a model group so Move/Rotate on the group moves every line together. " +
-                       "To align another element to a pattern line: Align, pick the element, then Tab to a hatch line. " +
-                       "To rotate the pattern use this dialog; Align does not rotate the whole hatch. " +
+                       "Hatch lines are written in chunks (~25k lines per DirectShape); Tab still picks individual line references inside a chunk where Revit allows. " +
+                       "Each FPF Floor Edge segment is its own element so you can delete one edge without losing the rest. " +
+                       "When the pattern is small enough, chunks are grouped so one Move/Rotate can drag the whole hatch; otherwise move each chunk. " +
+                       "To align: Align, pick the element, then Tab to the hatch line. Pattern rotation: this dialog (Align does not rotate the hatch). " +
                        "The floor outline is subcategory \"" + FpfOptions.EdgeSubcategoryName +
                        "\" (Object Styles → Model Objects → Generic Models). " +
                        "Refresh rebuilds edges you deleted. In a sheet file set the link to \"By Host View\" so its filters apply." +

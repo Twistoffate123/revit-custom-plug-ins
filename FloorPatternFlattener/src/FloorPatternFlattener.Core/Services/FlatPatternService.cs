@@ -222,7 +222,7 @@ namespace FloorPatternFlattener.Services
 
             if (LastFloorSegments > FpfOptions.HeavyPatternConfirmSegments)
                 _report.Heavy.Add(FpfReport.Describe(floor) + ": " + LastFloorSegments.ToString("N0") +
-                    " lines in " + shapes.Count + " separate elements (one line each for Align). The full hatch was written.");
+                    " lines in " + shapes.Count + " DirectShape(s) (hatch chunked, edges one per line).");
 
             TryGroupPatternShapes(shapes);
 
@@ -316,9 +316,12 @@ namespace FloorPatternFlattener.Services
             }
             foreach (var g in groups.OrderBy(g => g.Key == null ? 1 : (int)g.Key.Kind))
             {
-                for (var start = 0; start < g.Value.Count; start += FpfOptions.SegmentsPerDirectShape)
+                var perDs = g.Key?.Kind == PatternLayerKind.Edge
+                    ? FpfOptions.SegmentsPerEdgeDirectShape
+                    : FpfOptions.SegmentsPerDirectShape;
+                for (var start = 0; start < g.Value.Count; start += perDs)
                 {
-                    chunks.Add(g.Value.GetRange(start, Math.Min(FpfOptions.SegmentsPerDirectShape, g.Value.Count - start)));
+                    chunks.Add(g.Value.GetRange(start, Math.Min(perDs, g.Value.Count - start)));
                     chunkLayers.Add(g.Key);
                 }
             }
@@ -397,12 +400,12 @@ namespace FloorPatternFlattener.Services
         }
 
         /// <summary>
-        /// One model group per floor pattern so Move/Rotate applies to every line together.
-        /// Refresh replaces the group when the pattern is rebuilt.
+        /// Optional one model group per floor so Move/Rotate can target all hatch chunks at once.
+        /// Skipped when there are many shapes (grouping can be slow); each chunk still moves as a unit.
         /// </summary>
         private void TryGroupPatternShapes(List<DirectShape> shapes)
         {
-            if (shapes == null || shapes.Count < 2) return;
+            if (shapes == null || shapes.Count < 2 || shapes.Count > 64) return;
             try
             {
                 var ids = new List<ElementId>();

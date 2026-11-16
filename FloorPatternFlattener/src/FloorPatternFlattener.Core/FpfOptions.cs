@@ -73,7 +73,7 @@ namespace FloorPatternFlattener
         public const string DirectShapeNamePrefix = "Flat Pattern - Floor ";
 
         /// <summary>Bump when hatch generation changes so stored signatures no longer match.</summary>
-        public const int AlgorithmVersion = 7; // 7: face-loop boundaries; per-line DS; 2.5 mm hatch lift
+        public const int AlgorithmVersion = 8; // 8: hatch chunked again; face-loop edges; per-edge DS
 
         /// <summary>Extensible storage schema version written into every entity.</summary>
         public const int SchemaDataVersion = 1;
@@ -97,12 +97,12 @@ namespace FloorPatternFlattener
         public const double DotLengthFeet = 1.5 / 304.8;
 
         /// <summary>
-        /// Pattern hatch segments per DirectShape. One line per element so every line is an Align reference.
-        /// The full hatch is always written; there is no segment cap.
+        /// Hatch segments per DirectShape (foreground/background). Each curve stays separate inside the chunk
+        /// so Align can Tab to individual lines where Revit exposes references. No maximum segment count.
         /// </summary>
-        public const int SegmentsPerDirectShape = 1;
+        public const int SegmentsPerDirectShape = 25000;
 
-        /// <summary>Floor-edge segments are always one line per DirectShape so a single edge can be deleted.</summary>
+        /// <summary>Each FPF Floor Edge straight run is its own DirectShape so one edge can be deleted.</summary>
         public const int SegmentsPerEdgeDirectShape = 1;
 
         /// <summary>Cracks narrower than this between triangulated faces are joined so the hatch stays continuous (1 mm).</summary>

@@ -477,7 +477,11 @@ namespace FloorPatternFlattener.Geometry
             });
         }
 
-        /// <summary>Face boundary for the heavy edge (Revit edge loops only, not triangulation mesh).</summary>
+        /// <summary>
+        /// Floor-edge source geometry: only Revit <see cref="Face.EdgeLoops"/> (outer + opening loops).
+        /// Triangulation folds, sub-element split lines, and edges shared by two top faces are not drawn here;
+        /// shared edges are added once per adjacent face and dropped later when their welded count is not 1.
+        /// </summary>
         private static void AddSurfaceBoundaryEdges(Face face, TopPiece piece, FloorHatchInput input)
         {
             if (face?.EdgeLoops == null || piece == null) return;
