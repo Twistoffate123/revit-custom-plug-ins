@@ -355,6 +355,7 @@ namespace FloorPatternFlattener.Services
             _report.Segments += segs.Count;
             LastFloorSegments += segs.Count;
             if (layer != null && layer.Kind == PatternLayerKind.Background) _report.BackgroundSegments += segs.Count;
+            if (layer != null && layer.Kind == PatternLayerKind.Edge) _report.EdgeSegments += segs.Count;
         }
 
         private bool TrySetShape(DirectShape ds, List<Segment3> segs, ElementId styleId)

@@ -99,6 +99,7 @@ Lines** (colour, weight, line pattern) and visibility; *Surface Patterns* overri
 filters that act on the pattern itself, use the *Surface* style: rule **Type Comments equals
 `FPF Flat Pattern - Surface`** (or the Comments rule) with a **Surface Patterns** override.
 
+- **Floor outline**: subcategory **Generic Models → FPF Floor Edge** (Object Styles). Default is black, line weight 5. Change the weight and colour there; the hatch subcategories are separate, so the outline stays heavier. Hatch strokes that run along the outline are removed so they do not draw on top of it.
 - **Both layers**: view filter, **Categories = Generic Models**, rule **Comments equals `FPF Flat Pattern`**.
 - **One layer**: rule **Type Comments equals `FPF Flat Pattern - Foreground`** (or `- Background`), or
   *Type Name* where your Revit version offers it in filter rules.

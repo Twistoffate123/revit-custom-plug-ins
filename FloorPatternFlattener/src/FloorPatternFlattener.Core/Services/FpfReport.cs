@@ -18,6 +18,7 @@ namespace FloorPatternFlattener.Services
         public int NonPlanarFaces;
         public int SkippedGrids;
         public int BackgroundSegments;
+        public int EdgeSegments;
         public int StyleFallbacks;
         public int LineFloors;
         /// <summary>Floors that were flattened with the removed Surface style and were rebuilt as Lines.</summary>
@@ -66,9 +67,15 @@ namespace FloorPatternFlattener.Services
             if (Updated > 0) sb.AppendLine("Regenerated: " + Updated);
             if (Unchanged > 0) sb.AppendLine("Already up to date: " + Unchanged);
             if (Cleared > 0) sb.AppendLine("Cleared: " + Cleared);
-            if (Segments > 0) sb.AppendLine("Hatch line segments written: " + Segments +
+            var hatch = Segments - EdgeSegments;
+            if (hatch < 0) hatch = 0;
+            if (hatch > 0) sb.AppendLine("Hatch line segments written: " + hatch +
                                             (BackgroundSegments > 0 ? " (background pattern: " + BackgroundSegments + ")" : "") +
                                             " (full hatch, no segment limit)");
+            if (EdgeSegments > 0)
+                sb.AppendLine("Floor edge lines written: " + EdgeSegments +
+                              " (subcategory \"" + FpfOptions.EdgeSubcategoryName + "\", default weight " +
+                              FpfOptions.EdgeLineWeight + ", black)");
 
             Section(sb, "Floors skipped", Skipped, 40);
             if (HideLiveChanged > 0)

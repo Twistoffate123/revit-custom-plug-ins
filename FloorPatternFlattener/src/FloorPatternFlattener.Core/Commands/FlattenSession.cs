@@ -168,8 +168,11 @@ namespace FloorPatternFlattener.Commands
 
             LastStyleSetting.Save(_state.Style);
             LastHideLiveSetting.Save(_state.HideLive);
-            var hint = "Control the lines with a view filter (Filter button) using Projection Lines; in a sheet file " +
-                       "set the link to \"By Host View\" so its filters apply." +
+            var hint = "Control the hatch with a view filter (Filter button) using Projection Lines. " +
+                       "The floor outline is subcategory \"" + FpfOptions.EdgeSubcategoryName +
+                       "\" (Object Styles → Model Objects → Generic Models). Change its line weight and colour there; " +
+                       "the default is black, weight " + FpfOptions.EdgeLineWeight + ". " +
+                       "In a sheet file set the link to \"By Host View\" so its filters apply." +
                        (_state.HideLive ? "\n\nLive pattern hiding: run Flat Pattern Filters in the sheet file (adds \"" +
                                           FpfOptions.FilterLiveFloorName + "\" with its overrides; tick the fold-lines option)." : "");
             var title = _state.Title;

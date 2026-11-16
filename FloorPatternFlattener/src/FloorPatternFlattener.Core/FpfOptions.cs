@@ -36,6 +36,21 @@ namespace FloorPatternFlattener
         public const string BackgroundTypeName = "FPF Flat Pattern - Background";
 
         /// <summary>
+        /// Generic Models subcategory for the floor outline and opening edges. Line weight and colour are set
+        /// when the subcategory is created (black, weight 5). Later edits in Object Styles are kept.
+        /// </summary>
+        public const string EdgeSubcategoryName = "FPF Floor Edge";
+
+        /// <summary>DirectShapeType / Type Comments for the boundary shapes.</summary>
+        public const string EdgeTypeName = "FPF Flat Pattern - Edge";
+
+        /// <summary>Projection line weight used the first time <see cref="EdgeSubcategoryName"/> is created (1–16).</summary>
+        public const int EdgeLineWeight = 5;
+
+        /// <summary>Pattern strokes within this distance of a boundary, and parallel to it, are cut away (2 mm).</summary>
+        public const double BoundaryOverlapFeet = 2.0 / 304.8;
+
+        /// <summary>
         /// Legacy: DirectShapeType / Type Comments of the removed "Surface" style. Only used to recognise and clean up
         /// old elements and the old "FPF - Flat Pattern Surface" filter; nothing new is created with it.
         /// </summary>
@@ -52,7 +67,7 @@ namespace FloorPatternFlattener
         public const string DirectShapeNamePrefix = "Flat Pattern - Floor ";
 
         /// <summary>Bump when hatch generation changes so stored signatures no longer match.</summary>
-        public const int AlgorithmVersion = 4; // 4: full hatch (no segment cap); continuous lines across shape-edited tops and openings
+        public const int AlgorithmVersion = 5; // 5: heavy floor-edge boundary, pattern trimmed off that edge
 
         /// <summary>Extensible storage schema version written into every entity.</summary>
         public const int SchemaDataVersion = 1;

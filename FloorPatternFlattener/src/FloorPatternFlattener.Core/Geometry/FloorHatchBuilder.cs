@@ -650,8 +650,18 @@ namespace FloorPatternFlattener.Geometry
 
             foreach (var group in groups.Values)
                 BuildGroup(group, input.Holes, placement, minLen, dotLen, result);
+
+            var boundary = new List<Segment3>();
+            AppendBoundary(input, minLen, boundary);
+            TrimPatternOffBoundary(result, boundary, minLen);
             return result;
         }
+
+        private static readonly PatternLayer EdgeLayer = new PatternLayer
+        {
+            Kind = PatternLayerKind.Edge,
+            Description = "floor edge"
+        };
 
         private static void BuildGroup(List<TopPiece> pieces, List<RegionXY> holes, PatternPlacement placement,
             double minLen, double dotLen, FloorHatchResult result)
@@ -815,7 +825,7 @@ namespace FloorPatternFlattener.Geometry
                 if (best == null && prev != null && (b - a) <= bridge) best = prev;
                 if (best == null)
                 {
-                    Flush(result, layer, poly, minLen);
+                    Flush(result, layer, poly, minLen, null);
                     poly.Clear();
                     prev = null;
                     continue;
@@ -824,7 +834,7 @@ namespace FloorPatternFlattener.Geometry
                 poly.Add(Lift(b, best, px, py, dx, dy));
                 prev = best;
             }
-            Flush(result, layer, poly, minLen);
+            Flush(result, layer, poly, minLen, null);
         }
 
         private static XYZ Lift(double t, TopPiece piece, double px, double py, double dx, double dy)
@@ -840,9 +850,10 @@ namespace FloorPatternFlattener.Geometry
         /// Emits the longest chords that stay within the drape tolerance. Fragments shorter than Revit's
         /// minimum curve length are merged into the neighbour or lengthened, not dropped.
         /// </summary>
-        private static void Flush(FloorHatchResult result, PatternLayer layer, List<XYZ> pts, double minLen)
+        private static void Flush(FloorHatchResult result, PatternLayer layer, List<XYZ> pts, double minLen, List<Segment3> target)
         {
             if (pts == null || pts.Count < 2) return;
+            var dest = target ?? result.Segments;
             var tol = FpfOptions.DrapeToleranceFeet;
             var s = 0;
             while (s < pts.Count - 1)
@@ -862,15 +873,15 @@ namespace FloorPatternFlattener.Geometry
                 {
                     if (len < 1.0e-9)
                     {
-                        result.SkippedShort++;
+                        if (target == null) result.SkippedShort++;
                     }
                     else
                     {
                         b = a + (b - a).Normalize() * minLen;
-                        result.Segments.Add(new Segment3 { A = a, B = b, Layer = layer });
+                        dest.Add(new Segment3 { A = a, B = b, Layer = layer });
                     }
                 }
-                else result.Segments.Add(new Segment3 { A = a, B = b, Layer = layer });
+                else dest.Add(new Segment3 { A = a, B = b, Layer = layer });
                 s = e;
             }
         }
@@ -891,6 +902,455 @@ namespace FloorPatternFlattener.Geometry
                 if (dist > max) max = dist;
             }
             return max;
+        }
+
+        /// <summary>
+        /// Outer silhouette plus opening loops, draped on the same planes as the hatch.
+        /// Shared triangle edges cancel, so fold lines inside the slab are not drawn as a boundary.
+        /// </summary>
+        private static void AppendBoundary(FloorHatchInput input, double minLen, List<Segment3> target)
+        {
+            var weld = FpfOptions.MeshCrackBridgeFeet;
+            var edges = new List<BEdge>();
+            foreach (var p in input.Pieces)
+            {
+                var raw = p?.Region?.RawEdges;
+                if (raw == null) continue;
+                for (var i = 0; i < raw.Count; i += 4)
+                    edges.Add(new BEdge { X1 = raw[i], Y1 = raw[i + 1], X2 = raw[i + 2], Y2 = raw[i + 3], Piece = p });
+            }
+            if (edges.Count == 0) return;
+
+            var idOf = new Dictionary<WeldKey, int>();
+            var vx = new List<double>();
+            var vy = new List<double>();
+            int Vid(double x, double y)
+            {
+                var key = new WeldKey { X = (long)Math.Round(x / weld), Y = (long)Math.Round(y / weld) };
+                if (idOf.TryGetValue(key, out var id)) return id;
+                id = vx.Count;
+                idOf[key] = id;
+                vx.Add(x);
+                vy.Add(y);
+                return id;
+            }
+
+            foreach (var e in edges)
+            {
+                e.A = Vid(e.X1, e.Y1);
+                e.B = Vid(e.X2, e.Y2);
+            }
+
+            var grid = new Dictionary<WeldKey, List<int>>();
+            var cell = Math.Max(weld * 8.0, 1.0);
+            for (var i = 0; i < vx.Count; i++)
+            {
+                var ck = new WeldKey { X = (long)Math.Floor(vx[i] / cell), Y = (long)Math.Floor(vy[i] / cell) };
+                if (!grid.TryGetValue(ck, out var bucket)) grid[ck] = bucket = new List<int>();
+                bucket.Add(i);
+            }
+
+            var micro = new List<BEdge>();
+            foreach (var e in edges)
+            {
+                if (e.A == e.B) continue;
+                var dx = e.X2 - e.X1;
+                var dy = e.Y2 - e.Y1;
+                var len2 = dx * dx + dy * dy;
+                if (len2 < 1.0e-18) continue;
+
+                var ts = new List<double> { 0, 1 };
+                var ids = new List<int> { e.A, e.B };
+                var c0x = (long)Math.Floor(Math.Min(e.X1, e.X2) / cell) - 1;
+                var c1x = (long)Math.Floor(Math.Max(e.X1, e.X2) / cell) + 1;
+                var c0y = (long)Math.Floor(Math.Min(e.Y1, e.Y2) / cell) - 1;
+                var c1y = (long)Math.Floor(Math.Max(e.Y1, e.Y2) / cell) + 1;
+                if (c1x - c0x <= 10000 && c1y - c0y <= 10000)
+                {
+                    for (var cx = c0x; cx <= c1x; cx++)
+                    for (var cy = c0y; cy <= c1y; cy++)
+                    {
+                        if (!grid.TryGetValue(new WeldKey { X = cx, Y = cy }, out var vs)) continue;
+                        for (var vi = 0; vi < vs.Count; vi++)
+                        {
+                            var v = vs[vi];
+                            if (v == e.A || v == e.B) continue;
+                            var t = ((vx[v] - e.X1) * dx + (vy[v] - e.Y1) * dy) / len2;
+                            if (t <= 1.0e-4 || t >= 1.0 - 1.0e-4) continue;
+                            var px = e.X1 + t * dx;
+                            var py = e.Y1 + t * dy;
+                            var ex = px - vx[v];
+                            var ey = py - vy[v];
+                            if (ex * ex + ey * ey <= weld * weld)
+                            {
+                                ts.Add(t);
+                                ids.Add(v);
+                            }
+                        }
+                    }
+                }
+
+                var order = new int[ts.Count];
+                for (var i = 0; i < order.Length; i++) order[i] = i;
+                Array.Sort(order, (i, j) => ts[i].CompareTo(ts[j]));
+                var prevT = -1.0;
+                var prevId = -1;
+                for (var oi = 0; oi < order.Length; oi++)
+                {
+                    var t = ts[order[oi]];
+                    var id = ids[order[oi]];
+                    if (prevId >= 0 && t - prevT > 1.0e-6 && id != prevId)
+                    {
+                        micro.Add(new BEdge
+                        {
+                            A = prevId, B = id, Piece = e.Piece,
+                            X1 = vx[prevId], Y1 = vy[prevId], X2 = vx[id], Y2 = vy[id]
+                        });
+                    }
+                    if (prevId < 0 || t - prevT > 1.0e-6)
+                    {
+                        prevT = t;
+                        prevId = id;
+                    }
+                }
+            }
+
+            var count = new Dictionary<PairKey, int>();
+            var sample = new Dictionary<PairKey, BEdge>();
+            foreach (var e in micro)
+            {
+                if (e.A == e.B) continue;
+                var key = new PairKey(e.A, e.B);
+                count.TryGetValue(key, out var n);
+                count[key] = n + 1;
+                if (n == 0) sample[key] = e;
+            }
+
+            var boundary = new List<BEdge>();
+            foreach (var kv in count)
+                if (kv.Value == 1) boundary.Add(sample[kv.Key]);
+
+            AddUncoveredHoles(input, boundary);
+            ChainBoundary(boundary, minLen, target);
+        }
+
+        /// <summary>Opening loops that the solid did not already leave as a single silhouette edge.</summary>
+        private static void AddUncoveredHoles(FloorHatchInput input, List<BEdge> boundary)
+        {
+            if (input.Holes == null) return;
+            var tol = FpfOptions.BoundaryOverlapFeet;
+            foreach (var hole in input.Holes)
+            {
+                var raw = hole?.RawEdges;
+                if (raw == null) continue;
+                for (var i = 0; i < raw.Count; i += 4)
+                {
+                    var x1 = raw[i];
+                    var y1 = raw[i + 1];
+                    var x2 = raw[i + 2];
+                    var y2 = raw[i + 3];
+                    var covered = false;
+                    for (var b = 0; b < boundary.Count; b++)
+                    {
+                        var e = boundary[b];
+                        if (PolygonClipper.CollinearOverlap(x1, y1, x2, y2, e.X1, e.Y1, e.X2, e.Y2, tol, out var lo, out var hi))
+                        {
+                            var len = Math.Sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1));
+                            if (len > 1.0e-9 && hi - lo > len * 0.5) { covered = true; break; }
+                        }
+                    }
+                    if (covered) continue;
+                    var piece = PieceNearest(input.Pieces, (x1 + x2) * 0.5, (y1 + y2) * 0.5);
+                    if (piece == null) continue;
+                    boundary.Add(new BEdge { X1 = x1, Y1 = y1, X2 = x2, Y2 = y2, Piece = piece, A = -1, B = -2 - i });
+                }
+            }
+        }
+
+        private static TopPiece PieceNearest(List<TopPiece> pieces, double x, double y)
+        {
+            TopPiece best = null;
+            var bestD = double.MaxValue;
+            var bestZ = double.NegativeInfinity;
+            for (var i = 0; i < pieces.Count; i++)
+            {
+                var p = pieces[i];
+                if (p?.Region == null) continue;
+                var d = DistToRegion(p.Region, x, y);
+                var z = p.ZAt(x, y);
+                if (d < bestD - 1.0e-6 || (Math.Abs(d - bestD) <= 1.0e-6 && z > bestZ))
+                {
+                    bestD = d;
+                    bestZ = z;
+                    best = p;
+                }
+            }
+            return best;
+        }
+
+        private static double DistToRegion(RegionXY region, double x, double y)
+        {
+            if (PolygonClipper.ContainsPoint(region, x, y)) return 0;
+            var e = region.RawEdges;
+            var best = double.MaxValue;
+            for (var i = 0; i < e.Count; i += 4)
+            {
+                var d = DistPointSeg(x, y, e[i], e[i + 1], e[i + 2], e[i + 3]);
+                if (d < best) best = d;
+            }
+            return best;
+        }
+
+        private static double DistPointSeg(double px, double py, double ax, double ay, double bx, double by)
+        {
+            var dx = bx - ax;
+            var dy = by - ay;
+            var len2 = dx * dx + dy * dy;
+            double t = 0;
+            if (len2 > 1.0e-18)
+            {
+                t = ((px - ax) * dx + (py - ay) * dy) / len2;
+                if (t < 0) t = 0;
+                else if (t > 1) t = 1;
+            }
+            var ex = ax + t * dx - px;
+            var ey = ay + t * dy - py;
+            return Math.Sqrt(ex * ex + ey * ey);
+        }
+
+        private static void ChainBoundary(List<BEdge> edges, double minLen, List<Segment3> target)
+        {
+            if (edges.Count == 0) return;
+            // Hole edges added with negative ids are not chained through the weld graph; emit them directly.
+            var linked = new List<BEdge>();
+            foreach (var e in edges)
+            {
+                if (e.A < 0 || e.B < 0)
+                {
+                    var piece = e.Piece;
+                    var pts = new List<XYZ>
+                    {
+                        LiftXY(e.X1, e.Y1, piece),
+                        LiftXY(e.X2, e.Y2, piece)
+                    };
+                    Flush(null, EdgeLayer, pts, minLen, target);
+                    continue;
+                }
+                linked.Add(e);
+            }
+            if (linked.Count == 0) return;
+
+            var adj = new Dictionary<int, List<int>>();
+            for (var i = 0; i < linked.Count; i++)
+            {
+                AddAdj(adj, linked[i].A, i);
+                AddAdj(adj, linked[i].B, i);
+            }
+            var used = new bool[linked.Count];
+            for (var i = 0; i < linked.Count; i++)
+            {
+                if (used[i]) continue;
+                var forward = new List<XYZ>();
+                Walk(linked, adj, used, i, linked[i].A, forward);
+                if (forward.Count >= 2)
+                    Flush(null, EdgeLayer, forward, minLen, target);
+            }
+        }
+
+        private static void AddAdj(Dictionary<int, List<int>> adj, int vertex, int edge)
+        {
+            if (!adj.TryGetValue(vertex, out var list)) adj[vertex] = list = new List<int>();
+            list.Add(edge);
+        }
+
+        /// <summary>Walks one direction, then the other, so an open chain is not cut in half.</summary>
+        private static void Walk(List<BEdge> edges, Dictionary<int, List<int>> adj, bool[] used, int start, int fromVertex, List<XYZ> pts)
+        {
+            var guard = 0;
+            var eidx = start;
+            var prev = fromVertex;
+            var backward = new List<XYZ>();
+            while (eidx >= 0 && !used[eidx] && guard++ < edges.Count + 2)
+            {
+                used[eidx] = true;
+                var e = edges[eidx];
+                var forwardDir = e.A == prev;
+                var x0 = forwardDir ? e.X1 : e.X2;
+                var y0 = forwardDir ? e.Y1 : e.Y2;
+                var x1 = forwardDir ? e.X2 : e.X1;
+                var y1 = forwardDir ? e.Y2 : e.Y1;
+                var next = forwardDir ? e.B : e.A;
+                if (pts.Count == 0) pts.Add(LiftXY(x0, y0, e.Piece));
+                pts.Add(LiftXY(x1, y1, e.Piece));
+                prev = next;
+                eidx = NextUnused(adj, used, next, eidx);
+            }
+
+            // Edges on the other side of the start vertex.
+            if (!adj.TryGetValue(fromVertex, out var startLinks)) return;
+            eidx = -1;
+            for (var i = 0; i < startLinks.Count; i++)
+                if (!used[startLinks[i]]) { eidx = startLinks[i]; break; }
+            prev = fromVertex;
+            guard = 0;
+            while (eidx >= 0 && !used[eidx] && guard++ < edges.Count + 2)
+            {
+                used[eidx] = true;
+                var e = edges[eidx];
+                var forwardDir = e.A == prev;
+                var x1 = forwardDir ? e.X2 : e.X1;
+                var y1 = forwardDir ? e.Y2 : e.Y1;
+                var next = forwardDir ? e.B : e.A;
+                backward.Add(LiftXY(x1, y1, e.Piece));
+                prev = next;
+                eidx = NextUnused(adj, used, next, eidx);
+            }
+            if (backward.Count == 0) return;
+            backward.Reverse();
+            backward.AddRange(pts);
+            pts.Clear();
+            pts.AddRange(backward);
+        }
+
+        private static int NextUnused(Dictionary<int, List<int>> adj, bool[] used, int vertex, int current)
+        {
+            if (!adj.TryGetValue(vertex, out var list)) return -1;
+            for (var i = 0; i < list.Count; i++)
+                if (list[i] != current && !used[list[i]]) return list[i];
+            return -1;
+        }
+
+        private static XYZ LiftXY(double x, double y, TopPiece piece)
+        {
+            var z = piece.ZAt(x, y);
+            var o = FpfOptions.SurfaceOffsetFeet;
+            return new XYZ(x + piece.Nx * o, y + piece.Ny * o, z + piece.Nz * o);
+        }
+
+        /// <summary>Cuts hatch strokes that run along the boundary so the heavy edge is what you see.</summary>
+        private static void TrimPatternOffBoundary(FloorHatchResult result, List<Segment3> boundary, double minLen)
+        {
+            if (boundary == null || boundary.Count == 0) return;
+            if (result.Segments.Count == 0)
+            {
+                result.Segments.AddRange(boundary);
+                return;
+            }
+
+            var tol = FpfOptions.BoundaryOverlapFeet;
+            var cell = 2.0;
+            var grid = new Dictionary<WeldKey, List<int>>();
+            for (var i = 0; i < boundary.Count; i++)
+            {
+                var s = boundary[i];
+                var minX = Math.Min(s.A.X, s.B.X) - tol;
+                var maxX = Math.Max(s.A.X, s.B.X) + tol;
+                var minY = Math.Min(s.A.Y, s.B.Y) - tol;
+                var maxY = Math.Max(s.A.Y, s.B.Y) + tol;
+                var c0x = (long)Math.Floor(minX / cell);
+                var c1x = (long)Math.Floor(maxX / cell);
+                var c0y = (long)Math.Floor(minY / cell);
+                var c1y = (long)Math.Floor(maxY / cell);
+                for (var cx = c0x; cx <= c1x; cx++)
+                for (var cy = c0y; cy <= c1y; cy++)
+                {
+                    var key = new WeldKey { X = cx, Y = cy };
+                    if (!grid.TryGetValue(key, out var list)) grid[key] = list = new List<int>();
+                    list.Add(i);
+                }
+            }
+
+            var kept = new List<Segment3>(result.Segments.Count + boundary.Count);
+            foreach (var seg in result.Segments)
+            {
+                if (seg?.A == null || seg.B == null) continue;
+                var cuts = new List<double[]>();
+                var minX = Math.Min(seg.A.X, seg.B.X) - tol;
+                var maxX = Math.Max(seg.A.X, seg.B.X) + tol;
+                var minY = Math.Min(seg.A.Y, seg.B.Y) - tol;
+                var maxY = Math.Max(seg.A.Y, seg.B.Y) + tol;
+                var seen = new HashSet<int>();
+                var c0x = (long)Math.Floor(minX / cell);
+                var c1x = (long)Math.Floor(maxX / cell);
+                var c0y = (long)Math.Floor(minY / cell);
+                var c1y = (long)Math.Floor(maxY / cell);
+                for (var cx = c0x; cx <= c1x && cuts.Count < 64; cx++)
+                for (var cy = c0y; cy <= c1y; cy++)
+                {
+                    if (!grid.TryGetValue(new WeldKey { X = cx, Y = cy }, out var list)) continue;
+                    for (var li = 0; li < list.Count; li++)
+                    {
+                        var bi = list[li];
+                        if (!seen.Add(bi)) continue;
+                        var b = boundary[bi];
+                        if (PolygonClipper.CollinearOverlap(
+                                seg.A.X, seg.A.Y, seg.B.X, seg.B.Y,
+                                b.A.X, b.A.Y, b.B.X, b.B.Y, tol, out var lo, out var hi))
+                            cuts.Add(new[] { lo, hi });
+                    }
+                }
+
+                if (cuts.Count == 0)
+                {
+                    kept.Add(seg);
+                    continue;
+                }
+
+                var len = seg.A.DistanceTo(seg.B);
+                var remain = PolygonClipper.SubtractIntervals(
+                    new List<double[]> { new[] { 0, len } },
+                    PolygonClipper.UnionIntervals(cuts, FpfOptions.MeshCrackBridgeFeet));
+                if (len < 1.0e-9) continue;
+                foreach (var iv in remain)
+                {
+                    if (iv[1] - iv[0] < minLen) continue;
+                    var t0 = iv[0] / len;
+                    var t1 = iv[1] / len;
+                    kept.Add(new Segment3
+                    {
+                        A = new XYZ(
+                            seg.A.X + (seg.B.X - seg.A.X) * t0,
+                            seg.A.Y + (seg.B.Y - seg.A.Y) * t0,
+                            seg.A.Z + (seg.B.Z - seg.A.Z) * t0),
+                        B = new XYZ(
+                            seg.A.X + (seg.B.X - seg.A.X) * t1,
+                            seg.A.Y + (seg.B.Y - seg.A.Y) * t1,
+                            seg.A.Z + (seg.B.Z - seg.A.Z) * t1),
+                        Layer = seg.Layer
+                    });
+                }
+            }
+            kept.AddRange(boundary);
+            result.Segments.Clear();
+            result.Segments.AddRange(kept);
+        }
+
+        private struct WeldKey : IEquatable<WeldKey>
+        {
+            public long X, Y;
+            public bool Equals(WeldKey other) => X == other.X && Y == other.Y;
+            public override bool Equals(object obj) => obj is WeldKey other && Equals(other);
+            public override int GetHashCode() => unchecked((int)(X * 73856093L ^ Y * 19349663L));
+        }
+
+        private struct PairKey : IEquatable<PairKey>
+        {
+            public int A, B;
+            public PairKey(int a, int b)
+            {
+                if (a < b) { A = a; B = b; }
+                else { A = b; B = a; }
+            }
+            public bool Equals(PairKey other) => A == other.A && B == other.B;
+            public override bool Equals(object obj) => obj is PairKey other && Equals(other);
+            public override int GetHashCode() => unchecked(A * 73856093 ^ B * 19349663);
+        }
+
+        private sealed class BEdge
+        {
+            public int A, B;
+            public double X1, Y1, X2, Y2;
+            public TopPiece Piece;
         }
 
         private static void SpanRegion(RegionXY r, PatternGridDef g, double nx, double ny, ref double smin, ref double smax)

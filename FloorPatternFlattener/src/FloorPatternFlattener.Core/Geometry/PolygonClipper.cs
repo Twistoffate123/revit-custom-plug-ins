@@ -238,5 +238,34 @@ namespace FloorPatternFlattener.Geometry
             }
             return result;
         }
+
+        /// <summary>
+        /// Overlap of segment CD with AB when the two are almost collinear and CD lies within
+        /// <paramref name="tol"/> of AB. <paramref name="lo"/> and <paramref name="hi"/> are distances along AB from A.
+        /// </summary>
+        public static bool CollinearOverlap(double ax, double ay, double bx, double by,
+            double cx, double cy, double dx, double dy, double tol,
+            out double lo, out double hi)
+        {
+            lo = hi = 0;
+            var abx = bx - ax;
+            var aby = by - ay;
+            var len = Math.Sqrt(abx * abx + aby * aby);
+            if (len < 1.0e-9) return false;
+            var cdx = dx - cx;
+            var cdy = dy - cy;
+            var clen = Math.Sqrt(cdx * cdx + cdy * cdy);
+            if (clen < 1.0e-9) return false;
+            // About 2 degrees: a brick joint that merely meets the edge is not removed.
+            if (Math.Abs(abx * cdy - aby * cdx) > 0.035 * len * clen) return false;
+            var distC = Math.Abs((cx - ax) * aby - (cy - ay) * abx) / len;
+            var distD = Math.Abs((dx - ax) * aby - (dy - ay) * abx) / len;
+            if (distC > tol || distD > tol) return false;
+            var tc = ((cx - ax) * abx + (cy - ay) * aby) / len;
+            var td = ((dx - ax) * abx + (dy - ay) * aby) / len;
+            lo = Math.Max(0, Math.Min(tc, td));
+            hi = Math.Min(len, Math.Max(tc, td));
+            return hi - lo > FpfOptions.GeometryTolerance;
+        }
     }
 }

@@ -22,7 +22,9 @@ namespace FloorPatternFlattener.Geometry
     public enum PatternLayerKind
     {
         Background = 0,
-        Foreground = 1
+        Foreground = 1,
+        /// <summary>Floor outline and opening edges. Own subcategory, not a fill pattern.</summary>
+        Edge = 2
     }
 
     /// <summary>

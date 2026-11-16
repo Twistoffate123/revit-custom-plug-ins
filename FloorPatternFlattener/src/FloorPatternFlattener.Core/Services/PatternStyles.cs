@@ -29,14 +29,19 @@ namespace FloorPatternFlattener.Services
 
         public static string SubcategoryName(PatternLayer layer)
         {
+            if (layer.Kind == PatternLayerKind.Edge) return FpfOptions.EdgeSubcategoryName;
             var name = FpfOptions.SubcategoryPrefix + (layer.Kind == PatternLayerKind.Background ? "Background" : "Foreground");
             if (!layer.IsBlack)
                 name += string.Format(CultureInfo.InvariantCulture, " RGB {0}-{1}-{2}", layer.Red, layer.Green, layer.Blue);
             return name;
         }
 
-        public static string TypeName(PatternLayerKind kind) =>
-            kind == PatternLayerKind.Background ? FpfOptions.BackgroundTypeName : FpfOptions.ForegroundTypeName;
+        public static string TypeName(PatternLayerKind kind)
+        {
+            if (kind == PatternLayerKind.Background) return FpfOptions.BackgroundTypeName;
+            if (kind == PatternLayerKind.Edge) return FpfOptions.EdgeTypeName;
+            return FpfOptions.ForegroundTypeName;
+        }
 
         /// <summary>Projection GraphicsStyle id of the layer's subcategory (created on first use), or InvalidElementId.</summary>
         public ElementId GetLineStyleId(PatternLayer layer)
@@ -60,8 +65,13 @@ namespace FloorPatternFlattener.Services
                     if (sub == null && parent.CanAddSubcategory)
                     {
                         sub = _doc.Settings.Categories.NewSubcategory(parent, name);
-                        // Colour is only set when the subcategory is created; later edits in Object Styles are kept.
+                        // Colour and weight are only set when the subcategory is created; later Object Styles edits are kept.
                         try { sub.LineColor = new Color(layer.Red, layer.Green, layer.Blue); } catch { /* ignore */ }
+                        if (layer.Kind == PatternLayerKind.Edge)
+                        {
+                            try { sub.SetLineWeight(FpfOptions.EdgeLineWeight, GraphicsStyleType.Projection); } catch { /* ignore */ }
+                            try { sub.SetLineWeight(FpfOptions.EdgeLineWeight, GraphicsStyleType.Cut); } catch { /* ignore */ }
+                        }
                     }
 
                     var gs = sub?.GetGraphicsStyle(GraphicsStyleType.Projection);
