@@ -46,6 +46,9 @@ namespace FloorPatternFlattener.Geometry
         /// <summary>Top-surface boundary from Revit face edge loops only (never triangle interior edges).</summary>
         public List<BoundaryEdge> BoundaryEdges { get; } = new List<BoundaryEdge>();
 
+        /// <summary>Welded keys so the same tessellated edge is not added from every top-face fragment.</summary>
+        internal HashSet<long> BoundaryEdgeKeys { get; } = new HashSet<long>();
+
         /// <summary>Set when no upward face could be used. The floor is skipped and this text is shown.</summary>
         public string FailureReason { get; set; }
 
@@ -65,6 +68,9 @@ namespace FloorPatternFlattener.Geometry
 
         /// <summary>Foreground / background surface pattern (and its colour) this segment belongs to.</summary>
         public PatternLayer Layer;
+
+        /// <summary>Edge runs with the same id are written into one DirectShape (straight side or one curved span).</summary>
+        public int EdgeRun;
     }
 
     /// <summary>One boundary segment from a face's outer or inner edge loop, draped on that face.</summary>
@@ -490,20 +496,69 @@ namespace FloorPatternFlattener.Geometry
                 foreach (Edge edge in loop)
                 {
                     var pts = edge.Tessellate();
-                    if (pts == null) continue;
-                    for (var i = 0; i + 1 < pts.Count; i++)
-                    {
-                        var x1 = pts[i].X;
-                        var y1 = pts[i].Y;
-                        var x2 = pts[i + 1].X;
-                        var y2 = pts[i + 1].Y;
-                        if (Math.Abs(x1 - x2) < 1.0e-12 && Math.Abs(y1 - y2) < 1.0e-12) continue;
-                        input.BoundaryEdges.Add(new BoundaryEdge
-                        {
-                            X1 = x1, Y1 = y1, X2 = x2, Y2 = y2, Piece = piece
-                        });
-                    }
+                    if (pts == null || pts.Count < 2) continue;
+                    AppendMergedTessellatedEdges(pts, piece, input);
                 }
+            }
+        }
+
+        private static void AppendMergedTessellatedEdges(IList<XYZ> pts, TopPiece piece, FloorHatchInput input)
+        {
+            var col = 0.5 / 304.8;
+            var w = FpfOptions.MeshCrackBridgeFeet;
+            int runStart = 0;
+            for (var i = 1; i < pts.Count; i++)
+            {
+                var isEnd = i + 1 >= pts.Count;
+                if (!isEnd && CollinearXY(pts[runStart], pts[i], pts[i + 1], col)) continue;
+                var x1 = pts[runStart].X;
+                var y1 = pts[runStart].Y;
+                var x2 = pts[i].X;
+                var y2 = pts[i].Y;
+                if (Math.Abs(x1 - x2) < 1.0e-12 && Math.Abs(y1 - y2) < 1.0e-12)
+                {
+                    runStart = i;
+                    continue;
+                }
+                TryAddBoundaryEdge(input, piece, x1, y1, x2, y2, w);
+                runStart = i;
+            }
+        }
+
+        private static bool CollinearXY(XYZ a, XYZ b, XYZ c, double tol)
+        {
+            var vx = c.X - a.X;
+            var vy = c.Y - a.Y;
+            var len2 = vx * vx + vy * vy;
+            if (len2 < 1.0e-18) return true;
+            var ex = b.X - a.X;
+            var ey = b.Y - a.Y;
+            var cross = Math.Abs(ex * vy - ey * vx);
+            return cross / Math.Sqrt(len2) <= tol;
+        }
+
+        private static void TryAddBoundaryEdge(FloorHatchInput input, TopPiece piece,
+            double x1, double y1, double x2, double y2, double weld)
+        {
+            var key = BoundaryEdgeKey(x1, y1, x2, y2, weld);
+            if (!input.BoundaryEdgeKeys.Add(key)) return;
+            input.BoundaryEdges.Add(new BoundaryEdge { X1 = x1, Y1 = y1, X2 = x2, Y2 = y2, Piece = piece });
+        }
+
+        private static long BoundaryEdgeKey(double x1, double y1, double x2, double y2, double weld)
+        {
+            var ax = (long)Math.Round(x1 / weld);
+            var ay = (long)Math.Round(y1 / weld);
+            var bx = (long)Math.Round(x2 / weld);
+            var by = (long)Math.Round(y2 / weld);
+            if (ax > bx || (ax == bx && ay > by))
+            {
+                var t = ax; ax = bx; bx = t;
+                t = ay; ay = by; by = t;
+            }
+            unchecked
+            {
+                return (ax * 73856093L) ^ (ay * 19349663L) ^ (bx * 83492791L) ^ (by * 28348193L);
             }
         }
 
@@ -1388,32 +1443,91 @@ namespace FloorPatternFlattener.Geometry
             return Math.Sqrt(dx * dx + dy * dy);
         }
 
-        /// <summary>One Revit line per cleaned edge. Neighbouring lines share the exact same endpoint.</summary>
+        /// <summary>Corner spans become one straight segment; curved tessellation stays one edge run (one DirectShape).</summary>
         private static void EmitBoundary(List<List<Pt2>> loops, List<bool> closedFlags, List<TopPiece> pieces, double minLen, List<Segment3> target)
         {
+            var cornerRad = 2.0 * Math.PI / 180.0;
+            var nextRun = 1;
             for (var li = 0; li < loops.Count; li++)
             {
                 var loop = loops[li];
                 if (loop.Count < 2) continue;
                 var closed = li < closedFlags.Count && closedFlags[li];
-                var n = loop.Count;
-                var lifted = new XYZ[n];
-                for (var i = 0; i < n; i++)
+                var corners = CornerIndices(loop, closed, cornerRad);
+                if (corners.Count < 2) continue;
+                var spanCount = closed ? corners.Count : corners.Count - 1;
+                for (var s = 0; s < spanCount; s++)
                 {
-                    var piece = PieceNearest(pieces, loop[i].X, loop[i].Y);
-                    lifted[i] = piece == null
-                        ? new XYZ(loop[i].X, loop[i].Y, 0)
-                        : LiftXY(loop[i].X, loop[i].Y, piece);
-                }
-                var count = closed ? n : n - 1;
-                for (var i = 0; i < count; i++)
-                {
-                    var a = lifted[i];
-                    var b = lifted[(i + 1) % n];
-                    if (a.DistanceTo(b) < minLen) continue;
-                    target.Add(new Segment3 { A = a, B = b, Layer = EdgeLayer });
+                    var i0 = corners[s];
+                    var i1 = corners[(s + 1) % corners.Count];
+                    var runId = nextRun++;
+                    if (i0 == i1) continue;
+                    if (i0 < i1)
+                    {
+                        for (var i = i0; i < i1; i++)
+                            TryAddBoundarySpan(loop, i, pieces, minLen, target, runId);
+                    }
+                    else
+                    {
+                        for (var i = i0; i < loop.Count; i++)
+                            TryAddBoundarySpan(loop, i, pieces, minLen, target, runId);
+                        for (var i = 0; i < i1; i++)
+                            TryAddBoundarySpan(loop, i, pieces, minLen, target, runId);
+                    }
                 }
             }
+        }
+
+        private static void TryAddBoundarySpan(List<Pt2> loop, int i, List<TopPiece> pieces, double minLen,
+            List<Segment3> target, int runId)
+        {
+            var aPt = loop[i];
+            var bPt = loop[(i + 1) % loop.Count];
+            var pieceA = PieceNearest(pieces, aPt.X, aPt.Y);
+            var pieceB = PieceNearest(pieces, bPt.X, bPt.Y);
+            var a = pieceA == null ? new XYZ(aPt.X, aPt.Y, 0) : LiftXY(aPt.X, aPt.Y, pieceA);
+            var b = pieceB == null ? new XYZ(bPt.X, bPt.Y, 0) : LiftXY(bPt.X, bPt.Y, pieceB);
+            if (a.DistanceTo(b) < minLen) return;
+            target.Add(new Segment3 { A = a, B = b, Layer = EdgeLayer, EdgeRun = runId });
+        }
+
+        private static List<int> CornerIndices(List<Pt2> loop, bool closed, double minTurnRad)
+        {
+            var n = loop.Count;
+            var corners = new List<int>();
+            if (n < 2) return corners;
+            if (!closed)
+            {
+                corners.Add(0);
+                for (var i = 1; i < n - 1; i++)
+                    if (TurnAngle(loop[i - 1], loop[i], loop[i + 1]) >= minTurnRad) corners.Add(i);
+                corners.Add(n - 1);
+                return corners;
+            }
+            for (var i = 0; i < n; i++)
+            {
+                var prev = loop[(i + n - 1) % n];
+                var cur = loop[i];
+                var next = loop[(i + 1) % n];
+                if (TurnAngle(prev, cur, next) >= minTurnRad) corners.Add(i);
+            }
+            if (corners.Count == 0) corners.Add(0);
+            return corners;
+        }
+
+        private static double TurnAngle(Pt2 prev, Pt2 cur, Pt2 next)
+        {
+            var v1x = cur.X - prev.X;
+            var v1y = cur.Y - prev.Y;
+            var v2x = next.X - cur.X;
+            var v2y = next.Y - cur.Y;
+            var l1 = Math.Sqrt(v1x * v1x + v1y * v1y);
+            var l2 = Math.Sqrt(v2x * v2x + v2y * v2y);
+            if (l1 < 1.0e-12 || l2 < 1.0e-12) return 0;
+            var dot = (v1x * v2x + v1y * v2y) / (l1 * l2);
+            if (dot > 1) dot = 1;
+            else if (dot < -1) dot = -1;
+            return Math.Acos(dot);
         }
 
         /// <summary>

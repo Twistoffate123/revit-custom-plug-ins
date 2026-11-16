@@ -316,13 +316,22 @@ namespace FloorPatternFlattener.Services
             }
             foreach (var g in groups.OrderBy(g => g.Key == null ? 1 : (int)g.Key.Kind))
             {
-                var perDs = g.Key?.Kind == PatternLayerKind.Edge
-                    ? FpfOptions.SegmentsPerEdgeDirectShape
-                    : FpfOptions.SegmentsPerDirectShape;
-                for (var start = 0; start < g.Value.Count; start += perDs)
+                if (g.Key?.Kind == PatternLayerKind.Edge)
                 {
-                    chunks.Add(g.Value.GetRange(start, Math.Min(perDs, g.Value.Count - start)));
-                    chunkLayers.Add(g.Key);
+                    foreach (var run in GroupEdgeRuns(g.Value))
+                    {
+                        chunks.Add(run);
+                        chunkLayers.Add(g.Key);
+                    }
+                }
+                else
+                {
+                    var perDs = FpfOptions.SegmentsPerDirectShape;
+                    for (var start = 0; start < g.Value.Count; start += perDs)
+                    {
+                        chunks.Add(g.Value.GetRange(start, Math.Min(perDs, g.Value.Count - start)));
+                        chunkLayers.Add(g.Key);
+                    }
                 }
             }
 
@@ -420,6 +429,25 @@ namespace FloorPatternFlattener.Services
             {
                 // grouping is optional (worksharing, mixed categories, etc.)
             }
+        }
+
+        /// <summary>One DirectShape per boundary run (straight side or tessellated arc span).</summary>
+        private static List<List<Segment3>> GroupEdgeRuns(List<Segment3> edges)
+        {
+            var result = new List<List<Segment3>>();
+            if (edges == null || edges.Count == 0) return result;
+            var byRun = new Dictionary<int, List<Segment3>>();
+            var orphan = 1;
+            foreach (var seg in edges)
+            {
+                var id = seg.EdgeRun > 0 ? seg.EdgeRun : orphan++;
+                if (!byRun.TryGetValue(id, out var list))
+                    byRun[id] = list = new List<Segment3>();
+                list.Add(seg);
+            }
+            foreach (var kv in byRun.OrderBy(k => k.Key))
+                result.Add(kv.Value);
+            return result;
         }
 
         private static List<GeometryObject> MakeLines(List<Segment3> segments, ElementId styleId)

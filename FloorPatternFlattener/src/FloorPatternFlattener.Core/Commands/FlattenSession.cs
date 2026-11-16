@@ -291,11 +291,17 @@ namespace FloorPatternFlattener.Commands
                         out var line, out var click, out var dx, out var dy))
                     return;
 
-                var pattern = new PatternReader(_doc).ForMaterial(
-                    FloorHatchBuilder.GetTypeTopMaterial(_picked[0]));
+                var reader = new PatternReader(_doc);
+                var hatchIn = FloorHatchBuilder.ReadInput(_picked[0], reader);
+                PatternSource pattern = null;
+                foreach (var piece in hatchIn.Pieces)
+                {
+                    if (piece?.Pattern != null) { pattern = piece.Pattern; break; }
+                }
+                pattern ??= reader.ForMaterial(FloorHatchBuilder.GetTypeTopMaterial(_picked[0]));
                 var placement = _state.Placement.Clone();
                 if (!placement.TrySlideFromSecondLine(pattern, click.X, click.Y, dx, dy,
-                        out var slide, out var error))
+                        out var slide, out var error, out var detail))
                 {
                     _state.Status = error;
                     return;
@@ -305,7 +311,7 @@ namespace FloorPatternFlattener.Commands
                 placement.HasSecondaryAlign = true;
                 _state.Placement = placement;
                 _state.Status = "Alignment 2 (" + (edge ? "edge" : "line") + "): " +
-                                placement.Describe() + ". Press Preview or Apply." +
+                                placement.Describe() + " (" + detail + "). Press Preview or Apply." +
                                 (_state.PreviewLive ? " (The preview shown is still the previous one.)" : "");
             }
             catch (Autodesk.Revit.Exceptions.OperationCanceledException)
