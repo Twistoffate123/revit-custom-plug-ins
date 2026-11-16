@@ -43,6 +43,9 @@ namespace FloorPatternFlattener.Geometry
         /// <summary>Plan holes (shafts, face openings, sketch inner loops) subtracted after faces are unioned.</summary>
         public List<RegionXY> Holes { get; } = new List<RegionXY>();
 
+        /// <summary>Top-surface boundary from Revit face edge loops only (never triangle interior edges).</summary>
+        public List<BoundaryEdge> BoundaryEdges { get; } = new List<BoundaryEdge>();
+
         /// <summary>Set when no upward face could be used. The floor is skipped and this text is shown.</summary>
         public string FailureReason { get; set; }
 
@@ -62,6 +65,13 @@ namespace FloorPatternFlattener.Geometry
 
         /// <summary>Foreground / background surface pattern (and its colour) this segment belongs to.</summary>
         public PatternLayer Layer;
+    }
+
+    /// <summary>One boundary segment from a face's outer or inner edge loop, draped on that face.</summary>
+    public sealed class BoundaryEdge
+    {
+        public double X1, Y1, X2, Y2;
+        public TopPiece Piece;
     }
 
     public sealed class FloorHatchResult
@@ -237,6 +247,7 @@ namespace FloorPatternFlattener.Geometry
                         // Every loop: outer boundary and inner loops from shafts / face openings / sketch holes.
                         AddFaceEdges(face, piece.Region);
                         if (piece.Region.IsEmpty) continue;
+                        AddSurfaceBoundaryEdges(face, piece, input);
                         piece.Pattern = ResolvePattern(doc, floor, face, fallbackMaterial, patterns, input);
                         input.Pieces.Add(piece);
                     }
@@ -251,6 +262,7 @@ namespace FloorPatternFlattener.Geometry
                         if (mesh == null || mesh.NumTriangles == 0) continue;
 
                         PatternSource pattern = null;
+                        TopPiece drapePiece = null;
                         var added = 0;
                         for (var i = 0; i < mesh.NumTriangles; i++)
                         {
@@ -278,9 +290,14 @@ namespace FloorPatternFlattener.Geometry
                             piece.Region.AddEdge(c.X, c.Y, a.X, a.Y);
                             if (piece.Region.IsEmpty) continue;
                             input.Pieces.Add(piece);
+                            if (drapePiece == null) drapePiece = piece;
                             added++;
                         }
-                        if (added > 0) input.NonPlanarFaces++;
+                        if (added > 0)
+                        {
+                            input.NonPlanarFaces++;
+                            if (drapePiece != null) AddSurfaceBoundaryEdges(face, drapePiece, input);
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -368,6 +385,12 @@ namespace FloorPatternFlattener.Geometry
                     piece.Oz = bb.Max.Z;
                 }
                 piece.Pattern = ResolveFromMaterial(floor.Document, fallbackMaterial, patterns, input);
+                var raw = piece.Region.RawEdges;
+                for (var i = 0; i < raw.Count; i += 4)
+                    input.BoundaryEdges.Add(new BoundaryEdge
+                    {
+                        X1 = raw[i], Y1 = raw[i + 1], X2 = raw[i + 2], Y2 = raw[i + 3], Piece = piece
+                    });
                 input.Pieces.Add(piece);
                 input.UsedSketchFallback = true;
                 input.Notes.Add("no solid top faces were found; the sketch outline was flattened on a horizontal plane at the top of the floor. The slope is not followed.");
@@ -452,6 +475,32 @@ namespace FloorPatternFlattener.Geometry
                              h.MaxX >= maxX - 0.05 && h.MaxY >= maxY - 0.05;
                 return covers && ha >= area * 0.95;
             });
+        }
+
+        /// <summary>Face boundary for the heavy edge (Revit edge loops only, not triangulation mesh).</summary>
+        private static void AddSurfaceBoundaryEdges(Face face, TopPiece piece, FloorHatchInput input)
+        {
+            if (face?.EdgeLoops == null || piece == null) return;
+            foreach (EdgeArray loop in face.EdgeLoops)
+            {
+                foreach (Edge edge in loop)
+                {
+                    var pts = edge.Tessellate();
+                    if (pts == null) continue;
+                    for (var i = 0; i + 1 < pts.Count; i++)
+                    {
+                        var x1 = pts[i].X;
+                        var y1 = pts[i].Y;
+                        var x2 = pts[i + 1].X;
+                        var y2 = pts[i + 1].Y;
+                        if (Math.Abs(x1 - x2) < 1.0e-12 && Math.Abs(y1 - y2) < 1.0e-12) continue;
+                        input.BoundaryEdges.Add(new BoundaryEdge
+                        {
+                            X1 = x1, Y1 = y1, X2 = x2, Y2 = y2, Piece = piece
+                        });
+                    }
+                }
+            }
         }
 
         /// <summary>All edge loops (outer + inner) of a face, tessellated, projected to XY.</summary>
@@ -903,19 +952,20 @@ namespace FloorPatternFlattener.Geometry
         }
 
         /// <summary>
-        /// Outer silhouette plus opening loops, draped on the same planes as the hatch.
-        /// Shared triangle edges cancel, so fold lines inside the slab are not drawn as a boundary.
+        /// Outer silhouette plus opening loops, from Revit face edge loops only.
+        /// Shared top-face edges appear twice and are dropped; triangulation fold lines are never used.
         /// </summary>
         private static void AppendBoundary(FloorHatchInput input, double minLen, FloorHatchResult result)
         {
             var weld = FpfOptions.MeshCrackBridgeFeet;
             var edges = new List<BEdge>();
-            foreach (var p in input.Pieces)
+            foreach (var be in input.BoundaryEdges)
             {
-                var raw = p?.Region?.RawEdges;
-                if (raw == null) continue;
-                for (var i = 0; i < raw.Count; i += 4)
-                    edges.Add(new BEdge { X1 = raw[i], Y1 = raw[i + 1], X2 = raw[i + 2], Y2 = raw[i + 3], Piece = p });
+                if (be?.Piece == null) continue;
+                edges.Add(new BEdge
+                {
+                    X1 = be.X1, Y1 = be.Y1, X2 = be.X2, Y2 = be.Y2, Piece = be.Piece
+                });
             }
             if (edges.Count == 0) return;
 

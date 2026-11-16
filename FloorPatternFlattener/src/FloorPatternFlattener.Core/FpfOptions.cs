@@ -73,13 +73,13 @@ namespace FloorPatternFlattener
         public const string DirectShapeNamePrefix = "Flat Pattern - Floor ";
 
         /// <summary>Bump when hatch generation changes so stored signatures no longer match.</summary>
-        public const int AlgorithmVersion = 6; // 6: hatch inset off the boundary; edge lifted and joined
+        public const int AlgorithmVersion = 7; // 7: face-loop boundaries; per-line DS; 2.5 mm hatch lift
 
         /// <summary>Extensible storage schema version written into every entity.</summary>
         public const int SchemaDataVersion = 1;
 
-        /// <summary>Hatch lines are lifted this far along the face normal to avoid z-fighting (0.5 mm in feet).</summary>
-        public const double SurfaceOffsetFeet = 0.5 / 304.8;
+        /// <summary>Hatch lines are lifted this far along the face normal so they stay above the live floor top (2.5 mm).</summary>
+        public const double SurfaceOffsetFeet = 2.5 / 304.8;
 
         /// <summary>A top face must have normal.Z above this to be considered upward-facing (~87 deg max slope).</summary>
         public const double MinUpwardNormalZ = 0.05;
@@ -97,10 +97,13 @@ namespace FloorPatternFlattener
         public const double DotLengthFeet = 1.5 / 304.8;
 
         /// <summary>
-        /// Segments per DirectShape. The full hatch is always written; a floor with more lines is split
-        /// across several shapes so each element stays a manageable size. There is no segment cap.
+        /// Pattern hatch segments per DirectShape. One line per element so every line is an Align reference.
+        /// The full hatch is always written; there is no segment cap.
         /// </summary>
-        public const int SegmentsPerDirectShape = 25000;
+        public const int SegmentsPerDirectShape = 1;
+
+        /// <summary>Floor-edge segments are always one line per DirectShape so a single edge can be deleted.</summary>
+        public const int SegmentsPerEdgeDirectShape = 1;
 
         /// <summary>Cracks narrower than this between triangulated faces are joined so the hatch stays continuous (1 mm).</summary>
         public const double MeshCrackBridgeFeet = 1.0 / 304.8;

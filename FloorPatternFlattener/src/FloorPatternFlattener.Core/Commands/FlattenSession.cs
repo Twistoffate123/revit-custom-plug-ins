@@ -169,10 +169,13 @@ namespace FloorPatternFlattener.Commands
             LastStyleSetting.Save(_state.Style);
             LastHideLiveSetting.Save(_state.HideLive);
             var hint = "Control the hatch with a view filter (Filter button) using Projection Lines. " +
+                       "Each hatch line and each floor-edge segment is its own Generic Model element (for Align refs and deleting one edge). " +
+                       "The flat pattern is also placed in a model group so Move/Rotate on the group moves every line together. " +
+                       "To align another element to a pattern line: Align, pick the element, then Tab to a hatch line. " +
+                       "To rotate the pattern use this dialog; Align does not rotate the whole hatch. " +
                        "The floor outline is subcategory \"" + FpfOptions.EdgeSubcategoryName +
-                       "\" (Object Styles → Model Objects → Generic Models). Change its line weight and colour there; " +
-                       "the default is black, weight " + FpfOptions.EdgeLineWeight + ". " +
-                       "In a sheet file set the link to \"By Host View\" so its filters apply." +
+                       "\" (Object Styles → Model Objects → Generic Models). " +
+                       "Refresh rebuilds edges you deleted. In a sheet file set the link to \"By Host View\" so its filters apply." +
                        (_state.HideLive ? "\n\nLive pattern hiding: run Flat Pattern Filters in the sheet file (adds \"" +
                                           FpfOptions.FilterLiveFloorName + "\" with its overrides; tick the fold-lines option)." : "");
             var title = _state.Title;

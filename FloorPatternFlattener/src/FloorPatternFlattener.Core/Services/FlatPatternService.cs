@@ -222,7 +222,9 @@ namespace FloorPatternFlattener.Services
 
             if (LastFloorSegments > FpfOptions.HeavyPatternConfirmSegments)
                 _report.Heavy.Add(FpfReport.Describe(floor) + ": " + LastFloorSegments.ToString("N0") +
-                    " lines, split across " + shapes.Count + " shapes. The full hatch was written.");
+                    " lines in " + shapes.Count + " separate elements (one line each for Align). The full hatch was written.");
+
+            TryGroupPatternShapes(shapes);
 
             // ---- floor link (written last; signature guards the updater against re-trigger loops)
             if (style != storedStyle || legacySurface) FpfStorage.WriteStyle(floor, style);
@@ -392,6 +394,29 @@ namespace FloorPatternFlattener.Services
             var ds = DirectShape.CreateElement(_doc, cat);
             ds.ApplicationId = FpfOptions.ApplicationId;
             return ds;
+        }
+
+        /// <summary>
+        /// One model group per floor pattern so Move/Rotate applies to every line together.
+        /// Refresh replaces the group when the pattern is rebuilt.
+        /// </summary>
+        private void TryGroupPatternShapes(List<DirectShape> shapes)
+        {
+            if (shapes == null || shapes.Count < 2) return;
+            try
+            {
+                var ids = new List<ElementId>();
+                foreach (var ds in shapes)
+                {
+                    if (ds != null && ds.IsValidObject) ids.Add(ds.Id);
+                }
+                if (ids.Count < 2) return;
+                _doc.Create.NewGroup(ids);
+            }
+            catch
+            {
+                // grouping is optional (worksharing, mixed categories, etc.)
+            }
         }
 
         private static List<GeometryObject> MakeLines(List<Segment3> segments, ElementId styleId)
