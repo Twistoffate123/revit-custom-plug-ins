@@ -50,6 +50,12 @@ namespace FloorPatternFlattener
         /// <summary>Pattern strokes within this distance of a boundary, and parallel to it, are cut away (2 mm).</summary>
         public const double BoundaryOverlapFeet = 2.0 / 304.8;
 
+        /// <summary>Hatch is clipped this far inside the floor outline and outside opening edges (1.5 mm).</summary>
+        public const double HatchInsetFeet = 1.5 / 304.8;
+
+        /// <summary>Boundary is lifted this far above the hatch lines, along the face normal (2 mm).</summary>
+        public const double EdgeLiftAboveHatchFeet = 2.0 / 304.8;
+
         /// <summary>
         /// Legacy: DirectShapeType / Type Comments of the removed "Surface" style. Only used to recognise and clean up
         /// old elements and the old "FPF - Flat Pattern Surface" filter; nothing new is created with it.
@@ -67,7 +73,7 @@ namespace FloorPatternFlattener
         public const string DirectShapeNamePrefix = "Flat Pattern - Floor ";
 
         /// <summary>Bump when hatch generation changes so stored signatures no longer match.</summary>
-        public const int AlgorithmVersion = 5; // 5: heavy floor-edge boundary, pattern trimmed off that edge
+        public const int AlgorithmVersion = 6; // 6: hatch inset off the boundary; edge lifted and joined
 
         /// <summary>Extensible storage schema version written into every entity.</summary>
         public const int SchemaDataVersion = 1;
