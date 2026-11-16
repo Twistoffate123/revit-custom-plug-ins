@@ -64,6 +64,11 @@ namespace FloorPatternFlattener.Commands
                         PickAlignment(dlg.Action == DialogAction.PickEdge);
                         continue;
 
+                    case DialogAction.PickEdge2:
+                    case DialogAction.PickLine2:
+                        PickSecondaryAlignment(dlg.Action == DialogAction.PickEdge2);
+                        continue;
+
                     case DialogAction.Preview:
                         RollBackPreview();
                         if (!Build()) continue;
@@ -236,69 +241,21 @@ namespace FloorPatternFlattener.Commands
         {
             try
             {
-                Reference r;
-                Curve curve;
-                XYZ click;
-                if (edge)
-                {
-                    r = _uidoc.Selection.PickObject(ObjectType.Edge,
-                        "Pick a straight edge with a direction in plan (slab edge, kerb, wall...)");
-                    var el = _doc.GetElement(r);
-                    curve = (el?.GetGeometryObjectFromReference(r) as Edge)?.AsCurve();
-                    click = r.GlobalPoint;
-                    // Edges of family instances may come back in family coordinates: move them if they miss the click.
-                    if (curve != null && el is FamilyInstance fi && click != null)
-                    {
-                        try
-                        {
-                            if (curve.Distance(click) > 0.05)
-                                curve = curve.CreateTransformed(fi.GetTotalTransform());
-                        }
-                        catch
-                        {
-                            // keep as is
-                        }
-                    }
-                }
-                else
-                {
-                    r = _uidoc.Selection.PickObject(ObjectType.Element, new LineFilter(),
-                        "Pick a straight model line, detail line or grid");
-                    var el = _doc.GetElement(r);
-                    curve = el is CurveElement ce ? ce.GeometryCurve : (el as Grid)?.Curve;
-                    click = r.GlobalPoint;
-                }
-
-                if (!(curve is Line line) || !line.IsBound)
-                {
-                    _state.Status = "Align: pick a straight edge or line (arcs and splines are not supported).";
+                if (!TryPickStraightLine(edge,
+                        edge ? "Pick a straight edge with a direction in plan (slab edge, kerb, wall...)" :
+                        "Pick a straight model line, detail line or grid",
+                        requirePlanDirection: true,
+                        out var line, out var click, out var dx, out var dy))
                     return;
-                }
-
-                var a = line.GetEndPoint(0);
-                var b = line.GetEndPoint(1);
-                if (click != null && click.DistanceTo(b) < click.DistanceTo(a))
-                {
-                    var t = a;
-                    a = b;
-                    b = t;
-                }
-                var dx = b.X - a.X;
-                var dy = b.Y - a.Y;
-                if (Math.Sqrt(dx * dx + dy * dy) < 1.0e-6 || Math.Sqrt(dx * dx + dy * dy) < 0.01 * line.Length)
-                {
-                    _state.Status = "Align: that edge is vertical (no direction in plan). Pick another.";
-                    return;
-                }
 
                 _state.Placement = new PatternPlacement
                 {
                     AngleRad = Math.Atan2(dy, dx),
                     HasAnchor = true,
-                    AnchorX = a.X,
-                    AnchorY = a.Y
+                    AnchorX = line.GetEndPoint(0).X,
+                    AnchorY = line.GetEndPoint(0).Y
                 };
-                _state.Status = "Aligned to the picked " + (edge ? "edge" : "line") + ": " +
+                _state.Status = "Alignment 1 (" + (edge ? "edge" : "line") + "): " +
                                 _state.Placement.Describe() + ". Press Preview or Apply." +
                                 (_state.PreviewLive ? " (The preview shown is still the previous one.)" : "");
             }
@@ -310,6 +267,125 @@ namespace FloorPatternFlattener.Commands
             {
                 _state.Status = "Align failed: " + ex.Message;
             }
+        }
+
+        private void PickSecondaryAlignment(bool edge)
+        {
+            try
+            {
+                if (!_state.Placement.HasAnchor)
+                {
+                    _state.Status = "Pick alignment 1 first (Align to Edge or Align to Line).";
+                    return;
+                }
+                if (_picked == null || _picked.Count == 0)
+                {
+                    _state.Status = "Select at least one floor before alignment 2.";
+                    return;
+                }
+
+                if (!TryPickStraightLine(edge,
+                        edge ? "Pick a second straight edge (typically across the pattern joints)..." :
+                        "Pick a second straight line or grid (typically perpendicular to alignment 1)...",
+                        requirePlanDirection: false,
+                        out var line, out var click, out var dx, out var dy))
+                    return;
+
+                var pattern = new PatternReader(_doc).ForMaterial(
+                    FloorHatchBuilder.GetTypeTopMaterial(_picked[0]));
+                var placement = _state.Placement.Clone();
+                if (!placement.TrySlideFromSecondLine(pattern, click.X, click.Y, dx, dy,
+                        out var slide, out var error))
+                {
+                    _state.Status = error;
+                    return;
+                }
+
+                placement.SlideAlongPrimary = slide;
+                placement.HasSecondaryAlign = true;
+                _state.Placement = placement;
+                _state.Status = "Alignment 2 (" + (edge ? "edge" : "line") + "): " +
+                                placement.Describe() + ". Press Preview or Apply." +
+                                (_state.PreviewLive ? " (The preview shown is still the previous one.)" : "");
+            }
+            catch (Autodesk.Revit.Exceptions.OperationCanceledException)
+            {
+                // back to the dialog
+            }
+            catch (Exception ex)
+            {
+                _state.Status = "Alignment 2 failed: " + ex.Message;
+            }
+        }
+
+        private bool TryPickStraightLine(bool edge, string prompt, bool requirePlanDirection, out Line line, out XYZ click,
+            out double dx, out double dy)
+        {
+            line = null;
+            click = null;
+            dx = dy = 0;
+            Reference r;
+            Curve curve;
+            if (edge)
+            {
+                r = _uidoc.Selection.PickObject(ObjectType.Edge, prompt);
+                var el = _doc.GetElement(r);
+                curve = (el?.GetGeometryObjectFromReference(r) as Edge)?.AsCurve();
+                click = r.GlobalPoint;
+                if (curve != null && el is FamilyInstance fi && click != null)
+                {
+                    try
+                    {
+                        if (curve.Distance(click) > 0.05)
+                            curve = curve.CreateTransformed(fi.GetTotalTransform());
+                    }
+                    catch
+                    {
+                        // keep as is
+                    }
+                }
+            }
+            else
+            {
+                r = _uidoc.Selection.PickObject(ObjectType.Element, new LineFilter(), prompt);
+                var el = _doc.GetElement(r);
+                curve = el is CurveElement ce ? ce.GeometryCurve : (el as Grid)?.Curve;
+                click = r.GlobalPoint;
+            }
+
+            if (!(curve is Line picked) || !picked.IsBound)
+            {
+                _state.Status = "Align: pick a straight edge or line (arcs and splines are not supported).";
+                return false;
+            }
+
+            var a = picked.GetEndPoint(0);
+            var b = picked.GetEndPoint(1);
+            if (click != null && click.DistanceTo(b) < click.DistanceTo(a))
+            {
+                var t = a;
+                a = b;
+                b = t;
+                picked = Line.CreateBound(a, b);
+            }
+
+            dx = b.X - a.X;
+            dy = b.Y - a.Y;
+            var planLen = Math.Sqrt(dx * dx + dy * dy);
+            if (requirePlanDirection &&
+                (planLen < 1.0e-6 || planLen < 0.01 * picked.Length))
+            {
+                _state.Status = "Align: that edge is vertical (no direction in plan). Pick another.";
+                return false;
+            }
+            if (planLen < 1.0e-9)
+            {
+                _state.Status = "Align: the pick has no direction in plan.";
+                return false;
+            }
+
+            line = picked;
+            return true;
         }
 
         private sealed class LineFilter : ISelectionFilter

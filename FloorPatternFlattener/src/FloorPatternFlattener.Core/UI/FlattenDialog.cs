@@ -20,7 +20,10 @@ namespace FloorPatternFlattener.UI
         Preview,
         Apply,
         PickEdge,
-        PickLine
+        PickLine,
+        PickEdge2,
+        PickLine2,
+        ClearSecondary
     }
 
     /// <summary>Everything the Flatten / Edit dialog edits; survives the dialog being closed for picks.</summary>
@@ -54,7 +57,7 @@ namespace FloorPatternFlattener.UI
         private readonly RadioButton _scopeSel, _scopeType;
         private readonly CheckBox _hideLive;
         private readonly TextBox _angle;
-        private readonly TextBlock _anchor, _status;
+        private readonly TextBlock _anchor, _anchor2, _status;
         public DialogAction Action { get; private set; } = DialogAction.Cancel;
 
         public FlattenDialog(FlattenDialogState state, IntPtr owner)
@@ -95,15 +98,23 @@ namespace FloorPatternFlattener.UI
                 "Pick a straight model edge (slab edge, kerb, wall) with a direction in plan."));
             row.Children.Add(Button("Align to Line...", () => Close(DialogAction.PickLine),
                 "Pick a straight model line, detail line or grid."));
+            row.Children.Add(Button("Align to Edge 2...", () => Close(DialogAction.PickEdge2),
+                "After alignment 1: pick a second edge so a joint line meets it (slide along line 1)."));
+            row.Children.Add(Button("Align to Line 2...", () => Close(DialogAction.PickLine2),
+                "After alignment 1: pick a second line (model/detail/grid), typically perpendicular to line 1."));
             row.Children.Add(Button("Clear", () =>
             {
                 _state.Placement = PatternPlacement.Identity;
                 _angle.Text = "0";
                 UpdateAnchor();
-            }, "Back to the live floor's pattern: no rotation, project origin."));
+            }, "Remove both alignments and set angle to 0 (live floor pattern)."));
+            row.Children.Add(Button("Clear line 2", () => Close(DialogAction.ClearSecondary),
+                "Remove alignment 2 only; keep angle and alignment 1."));
             root.Children.Add(row);
             _anchor = Text(string.Empty, true);
             root.Children.Add(_anchor);
+            _anchor2 = Text(string.Empty, true);
+            root.Children.Add(_anchor2);
             UpdateAnchor();
 
             root.Children.Add(Header("Apply to"));
@@ -157,12 +168,27 @@ namespace FloorPatternFlattener.UI
         private void UpdateAnchor()
         {
             _anchor.Text = _state.Placement.HasAnchor
-                ? "Anchored on a picked edge (pattern starts on it). Clear removes it."
-                : "No anchor: pattern starts at the project internal origin, like the live floor.";
+                ? "Alignment 1: angle and offset across the picked line (pattern joint runs along it)."
+                : "Alignment 1: not set — pattern matches the live floor at the project origin, or use the angle box only.";
+            if (!_state.Placement.HasSecondaryAlign)
+                _anchor2.Text = "Alignment 2: not set — pattern may still slide along line 1. Use Align to Line/Edge 2 after alignment 1.";
+            else
+            {
+                var mm = _state.Placement.SlideAlongPrimary * 304.8;
+                _anchor2.Text = "Alignment 2: slid " + mm.ToString("0.#", CultureInfo.InvariantCulture) +
+                                 " mm along line 1 so a joint line meets the second pick. Clear line 2 removes this.";
+            }
         }
 
         private void Close(DialogAction action)
         {
+            if (action == DialogAction.ClearSecondary)
+            {
+                _state.Placement.HasSecondaryAlign = false;
+                _state.Placement.SlideAlongPrimary = 0;
+                UpdateAnchor();
+                return;
+            }
             if (action != DialogAction.Cancel && action != DialogAction.Discard)
             {
                 if (!double.TryParse(_angle.Text.Trim().Replace(',', '.'), NumberStyles.Float,
