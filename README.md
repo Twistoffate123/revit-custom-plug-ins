@@ -61,10 +61,11 @@ deleted). **Flat Pattern Filters → Remove everywhere** also deletes the old "F
    open), split into dashes, then each endpoint is **projected vertically onto that face's plane**
    (z from the plane equation) and offset **0.5 mm along the face normal** (`FpfOptions.SurfaceOffsetFeet`) to
    avoid z-fighting. A straight line projected onto a plane stays straight, so it reads as a plan pattern
-   while lying exactly on the slope. Segments shorter than Revit's `ShortCurveTolerance` are skipped.
-   - **Non-planar top faces** (rare for floors): best effort. The face is triangulated and every upward
-     triangle is treated as a small planar face. Lines stay continuous across triangles but are split at
-     triangle edges. The report shows the count.
+   while lying exactly on the slope. Segments shorter than Revit's `ShortCurveTolerance` are joined to the neighbouring chord or lengthened to that minimum, so a dash is not dropped.
+   - **Non-planar top faces** (shape-edited / warped floors): the face is triangulated and every upward
+     triangle is kept. Hatch lines are clipped once across the whole top (openings stay open) and then
+     draped onto the triangles, so a running-bond dash stays continuous instead of breaking up per triangle.
+     The report shows the count.
 5. **Real geometry.** The lines are stored in pinned **DirectShapes** (category **Generic Models**) named
    `Flat Pattern - Floor <id> Foreground|Background`, `Comments = "FPF Flat Pattern"`, with the floor's workset
    and phases (created/demolished). Each layer gets its own shapes, its own type (`FPF Flat Pattern - Foreground`
@@ -72,7 +73,7 @@ deleted). **Flat Pattern Filters → Remove everywhere** also deletes the old "F
    subcategory `FPF Pattern Foreground` / `FPF Pattern Background` (plus ` RGB r-g-b` when the material's pattern
    colour is not black; the subcategory's line colour is set to that colour when it is created).
    If a layer has more than 25,000 segments it is split across several DirectShapes.
-   The total is capped at **100,000 segments per floor**: past that the hatch is truncated and a warning is shown.
+   The full hatch is always written. There is no segment cap. A heavy floor is noted in the summary and is not truncated or blocked.
 6. **Links (extensible storage).** Fixed-GUID schemas, vendor `TWISTOFFATE`, **public read/write** (files open
    cleanly on machines without the add-in; the data just sits there):
    - on the floor: `Flattened`, DirectShape UniqueIds, a SHA-256 **signature** of all inputs (top-face
@@ -218,7 +219,7 @@ To control everything from the sheet file that links the models:
 ## Limitations / notes
 
 - **Element count**: very large floors with fine patterns create many lines (split across several DirectShapes,
-  capped at 100,000 segments per floor, then truncated with a warning). Heavy hatches slow views, so consider a
+  with no segment cap). The summary notes a heavy floor. Heavy hatches slow views, so consider a
   coarser pattern.
 - **Perspective 3D views** still foreshorten with distance. The pattern is flat on the surface, not screen-aligned.
 - **Without the add-in** other users still see (and print) the flat pattern lines,

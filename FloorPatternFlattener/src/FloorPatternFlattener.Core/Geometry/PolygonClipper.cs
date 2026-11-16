@@ -77,9 +77,11 @@ namespace FloorPatternFlattener.Geometry
                 var bx = e[i + 2] - px; var by = e[i + 3] - py;
                 var sa = ax * nx + ay * ny;
                 var sb = bx * nx + by * ny;
-                var aPos = sa > 0;
-                var bPos = sb > 0;
-                if (aPos == bPos) continue; // no crossing (half-open rule: s == 0 counts as "not positive")
+                // Half-open rule: a point exactly on the line is not "positive", so a vertex is
+                // counted once. A tiny epsilon stops near-misses on shape-edited meshes flipping parity.
+                var aPos = sa > 1.0e-9;
+                var bPos = sb > 1.0e-9;
+                if (aPos == bPos) continue;
 
                 var ta = ax * dx + ay * dy;
                 var tb = bx * dx + by * dy;
@@ -90,6 +92,13 @@ namespace FloorPatternFlattener.Geometry
 
             if (ts.Count < 2) return result;
             ts.Sort();
+            var w = 0;
+            for (var r = 0; r < ts.Count; r++)
+            {
+                if (w > 0 && Math.Abs(ts[r] - ts[w - 1]) < 1.0e-8) continue;
+                ts[w++] = ts[r];
+            }
+            if (w < ts.Count) ts.RemoveRange(w, ts.Count - w);
 
             for (var i = 0; i + 1 < ts.Count; i += 2)
             {
@@ -161,6 +170,73 @@ namespace FloorPatternFlattener.Geometry
                     }
                 }
             }
+        }
+
+        /// <summary>True when (x, y) is inside the region by the same even-odd rule as <see cref="ClipLine"/>.</summary>
+        public static bool ContainsPoint(RegionXY region, double x, double y)
+        {
+            var ivs = ClipLine(region, x, y, 1, 0);
+            for (var i = 0; i < ivs.Count; i++)
+                if (ivs[i][0] <= 1.0e-8 && ivs[i][1] >= -1.0e-8) return true;
+            return false;
+        }
+
+        /// <summary>
+        /// Merges overlapping or nearly-touching intervals. <paramref name="bridge"/> (same units as the
+        /// interval parameter) joins cracks left between triangulated faces without closing real openings.
+        /// </summary>
+        public static List<double[]> UnionIntervals(List<double[]> intervals, double bridge)
+        {
+            var merged = new List<double[]>();
+            if (intervals == null || intervals.Count == 0) return merged;
+            intervals.Sort((a, b) => a[0].CompareTo(b[0]));
+            var a0 = intervals[0][0];
+            var a1 = intervals[0][1];
+            for (var i = 1; i < intervals.Count; i++)
+            {
+                var b0 = intervals[i][0];
+                var b1 = intervals[i][1];
+                if (b0 <= a1 + bridge)
+                {
+                    if (b1 > a1) a1 = b1;
+                }
+                else
+                {
+                    merged.Add(new[] { a0, a1 });
+                    a0 = b0;
+                    a1 = b1;
+                }
+            }
+            merged.Add(new[] { a0, a1 });
+            return merged;
+        }
+
+        /// <summary>Returns <paramref name="source"/> with <paramref name="cuts"/> removed. Both lists are treated as sorted unions.</summary>
+        public static List<double[]> SubtractIntervals(List<double[]> source, List<double[]> cuts)
+        {
+            if (source == null || source.Count == 0) return new List<double[]>();
+            if (cuts == null || cuts.Count == 0) return source;
+            var cutU = UnionIntervals(cuts, 0);
+            var result = new List<double[]>();
+            foreach (var s in source)
+            {
+                var start = s[0];
+                var end = s[1];
+                for (var i = 0; i < cutU.Count; i++)
+                {
+                    var c0 = cutU[i][0];
+                    var c1 = cutU[i][1];
+                    if (c1 <= start) continue;
+                    if (c0 >= end) break;
+                    if (c0 > start + FpfOptions.GeometryTolerance)
+                        result.Add(new[] { start, Math.Min(c0, end) });
+                    if (c1 > start) start = c1;
+                    if (start >= end - FpfOptions.GeometryTolerance) break;
+                }
+                if (end - start > FpfOptions.GeometryTolerance)
+                    result.Add(new[] { start, end });
+            }
+            return result;
         }
     }
 }

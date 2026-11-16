@@ -52,7 +52,7 @@ namespace FloorPatternFlattener
         public const string DirectShapeNamePrefix = "Flat Pattern - Floor ";
 
         /// <summary>Bump when hatch generation changes so stored signatures no longer match.</summary>
-        public const int AlgorithmVersion = 3; // 2: herringbone fix; 3: background pattern + per-layer shapes/styles
+        public const int AlgorithmVersion = 4; // 4: full hatch (no segment cap); continuous lines across shape-edited tops and openings
 
         /// <summary>Extensible storage schema version written into every entity.</summary>
         public const int SchemaDataVersion = 1;
@@ -75,14 +75,20 @@ namespace FloorPatternFlattener
         /// <summary>Zero-length pattern dashes (dots) are drawn as tiny dashes of this length (1.5 mm).</summary>
         public const double DotLengthFeet = 1.5 / 304.8;
 
-        /// <summary>Hard cap on generated line segments per floor; beyond this the hatch is truncated and reported.</summary>
-        public const int MaxSegmentsPerFloor = 100000;
-
-        /// <summary>Segments per DirectShape element; larger hatches are split across several DirectShapes.</summary>
+        /// <summary>
+        /// Segments per DirectShape. The full hatch is always written; a floor with more lines is split
+        /// across several shapes so each element stays a manageable size. There is no segment cap.
+        /// </summary>
         public const int SegmentsPerDirectShape = 25000;
 
-        /// <summary>Safety cap on candidate hatch lines per grid per face (protects against absurd pattern scales).</summary>
-        public const int MaxLinesPerGrid = 200000;
+        /// <summary>Cracks narrower than this between triangulated faces are joined so the hatch stays continuous (1 mm).</summary>
+        public const double MeshCrackBridgeFeet = 1.0 / 304.8;
+
+        /// <summary>
+        /// A draped hatch line may leave the true surface by up to this much before it is split (5 mm).
+        /// Keeps one running-bond dash as one line across a gentle slope instead of a fragment per triangle.
+        /// </summary>
+        public const double DrapeToleranceFeet = 5.0 / 304.8;
 
         /// <summary>Hide generated DirectShapes in section / elevation / detail views so they never add a line there.</summary>
         public static readonly bool HideInSectionViews = true;

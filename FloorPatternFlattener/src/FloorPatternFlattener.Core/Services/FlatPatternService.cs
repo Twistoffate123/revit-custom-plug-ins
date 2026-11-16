@@ -60,7 +60,20 @@ namespace FloorPatternFlattener.Services
             PatternPlacement requestedPlacement = null, bool? requestedHideLive = null)
         {
             if (floor == null || !floor.IsValidObject) return false;
+            try
+            {
+                return ApplyCore(floor, mode, applyViewGraphics, requestedStyle, requestedPlacement, requestedHideLive);
+            }
+            catch (Exception ex)
+            {
+                _report.AddSkipped(floor, ex.Message);
+                return false;
+            }
+        }
 
+        private bool ApplyCore(Floor floor, ApplyMode mode, bool applyViewGraphics, FlattenStyle? requestedStyle,
+            PatternPlacement requestedPlacement, bool? requestedHideLive)
+        {
             // "Hide live floor pattern and fold lines": a mark in the floor's Comments that the
             // "FPF - Live Floor (hidden pattern)" view filter keys on (works through links, "By Host View").
             var markChanged = false;
@@ -74,6 +87,24 @@ namespace FloorPatternFlattener.Services
                 }
                 else _report.AddNotEditable(floor, "floor not editable (hide live pattern mark)");
             }
+
+            try
+            {
+                if (floor.GroupId != null && floor.GroupId != ElementId.InvalidElementId)
+                {
+                    _report.AddSkipped(floor, "inside a model group; ungroup it or edit the group before flattening");
+                    return markChanged;
+                }
+            }
+            catch { /* GroupId not available */ }
+
+            try
+            {
+                if (floor.DesignOption != null)
+                    _report.AddWarning(floor, "in design option \"" + floor.DesignOption.Name +
+                        "\". The flat pattern is created in the main model and may not follow that option's visibility.");
+            }
+            catch { /* ignore */ }
 
             var link = FpfStorage.ReadFloor(floor) ?? new FloorLinkData();
             var wasFlattened = link.Flattened;
@@ -99,8 +130,8 @@ namespace FloorPatternFlattener.Services
             }
             catch (Exception ex)
             {
-                _report.Errors.Add(FpfReport.Describe(floor) + ": " + ex.Message);
-                return false;
+                _report.AddSkipped(floor, ex.Message);
+                return markChanged;
             }
 
             var signature = EffectiveSignature(input.Signature, style, placement);
@@ -132,8 +163,29 @@ namespace FloorPatternFlattener.Services
                 }
             }
 
-            if (input.Pieces.Count == 0) _report.NoTopFace.Add(FpfReport.Describe(floor));
+            if (input.Pieces.Count == 0)
+            {
+                _report.AddSkipped(floor, string.IsNullOrEmpty(input.FailureReason)
+                    ? "no upward-facing top face"
+                    : input.FailureReason);
+                return markChanged;
+            }
             _report.NonPlanarFaces += input.NonPlanarFaces;
+            foreach (var note in input.Notes) _report.AddWarning(floor, note);
+
+            var build = FloorHatchBuilder.Build(input, _doc.Application.ShortCurveTolerance, _currentPlacement);
+            if (build.Segments.Count == 0)
+            {
+                var why = "pattern produced no lines";
+                if (build.SkippedGrids > 0) why += "; " + build.SkippedGrids + " grids had degenerate spacing";
+                if (build.SkippedShort > 0) why += "; " + build.SkippedShort + " fragments were shorter than Revit can store";
+                foreach (var n in build.Notes) why += "; " + n;
+                _report.AddSkipped(floor, why);
+                return markChanged;
+            }
+            if (build.SkippedShort > 0)
+                _report.AddWarning(floor, build.SkippedShort + " degenerate fragments could not be stored");
+            foreach (var n in build.Notes) _report.AddWarning(floor, n);
 
             if (legacySurface)
             {
@@ -150,13 +202,27 @@ namespace FloorPatternFlattener.Services
 
             var shapes = new List<DirectShape>();
             var created = new List<DirectShape>();
-            var count = BuildLineShapes(floor, input, existing, shapes, created);
+            BuildLineShapes(floor, input, build, existing, shapes, created);
 
-            for (var i = count; i < existing.Count; i++)
+            if (shapes.Count == 0 || LastFloorSegments == 0)
             {
-                try { _doc.Delete(existing[i].Id); }
-                catch { /* ignore */ }
+                _report.AddSkipped(floor, "Revit rejected the hatch lines (DirectShape could not be created).");
+                return markChanged;
             }
+
+            var used = new HashSet<string>();
+            foreach (var s in shapes) used.Add(s.UniqueId);
+            foreach (var ds in existing)
+            {
+                if (ds != null && ds.IsValidObject && !used.Contains(ds.UniqueId))
+                {
+                    try { _doc.Delete(ds.Id); } catch { /* ignore */ }
+                }
+            }
+
+            if (LastFloorSegments > FpfOptions.HeavyPatternConfirmSegments)
+                _report.Heavy.Add(FpfReport.Describe(floor) + ": " + LastFloorSegments.ToString("N0") +
+                    " lines, split across " + shapes.Count + " shapes. The full hatch was written.");
 
             // ---- floor link (written last; signature guards the updater against re-trigger loops)
             if (style != storedStyle || legacySurface) FpfStorage.WriteStyle(floor, style);
@@ -203,14 +269,16 @@ namespace FloorPatternFlattener.Services
         /// <summary>Line segments written for the floor of the last <see cref="Apply"/> call (Lines mode).</summary>
         public int LastFloorSegments { get; private set; }
 
-        /// <summary>Gets an existing shape at <paramref name="i"/> or creates one; null if creation failed.</summary>
-        private DirectShape ShapeAt(Floor floor, List<DirectShape> existing, List<DirectShape> created, int i)
+        /// <summary>Reuses <paramref name="slot"/> or creates one. The same slot returns the same element.</summary>
+        private DirectShape ShapeAt(Floor floor, List<DirectShape> existing, List<DirectShape> created, int slot)
         {
-            if (i < existing.Count) return existing[i];
+            if (slot < existing.Count) return existing[slot];
+            var extra = slot - existing.Count;
+            if (extra < created.Count) return created[extra];
             var ds = CreateShape();
             if (ds == null)
             {
-                _report.Errors.Add(FpfReport.Describe(floor) + ": DirectShape could not be created.");
+                _report.AddSkipped(floor, "DirectShape could not be created");
                 return null;
             }
             created.Add(ds);
@@ -219,12 +287,10 @@ namespace FloorPatternFlattener.Services
 
         // ------------------------------------------------------------ lines mode
 
-        /// <summary>Lines mode: hatch lines per pattern layer, one or more DirectShapes per layer. Returns shapes used.</summary>
-        private int BuildLineShapes(Floor floor, FloorHatchInput input, List<DirectShape> existing,
+        /// <summary>Lines mode: hatch lines per pattern layer, one or more DirectShapes per layer. No segment cap.</summary>
+        private void BuildLineShapes(Floor floor, FloorHatchInput input, FloorHatchResult build, List<DirectShape> existing,
             List<DirectShape> shapes, List<DirectShape> created)
         {
-            var build = FloorHatchBuilder.Build(input, _doc.Application.ShortCurveTolerance, _currentPlacement);
-            if (build.Truncated) _report.Truncated.Add(FpfReport.Describe(floor));
             if (input.UsedDefaultGrid) _report.DefaultGrid.Add(FpfReport.Describe(floor));
             if (input.UsedDraftingPattern) _report.DraftingScaled.Add(FpfReport.Describe(floor));
             _report.SkippedGrids += build.SkippedGrids;
@@ -255,55 +321,67 @@ namespace FloorPatternFlattener.Services
                 }
             }
 
-            // ---- DirectShapes (reuse existing elements so ids, hide state and user overrides survive)
             for (var i = 0; i < chunks.Count; i++)
+                CommitChunk(floor, chunks[i], chunkLayers[i], existing, created, shapes);
+        }
+
+        /// <summary>
+        /// Writes one chunk. If Revit rejects the shape, the chunk is split in half and retried so one bad
+        /// line cannot drop the rest of the floor. There is no maximum number of shapes.
+        /// </summary>
+        private void CommitChunk(Floor floor, List<Segment3> segs, PatternLayer layer, List<DirectShape> existing,
+            List<DirectShape> created, List<DirectShape> shapes)
+        {
+            if (segs == null || segs.Count == 0) return;
+            var ds = ShapeAt(floor, existing, created, shapes.Count);
+            if (ds == null) return;
+            var styleId = _styles.GetLineStyleId(layer);
+            if (!TrySetShape(ds, segs, styleId))
             {
-                var ds = ShapeAt(floor, existing, created, i);
-                if (ds == null) break;
-
-                var layer = chunkLayers[i];
-                var styleId = _styles.GetLineStyleId(layer);
-                var written = 0;
-                try
+                if (segs.Count <= 1)
                 {
-                    var geo = MakeLines(chunks[i], styleId);
-                    written = geo.Count;
-                    ds.SetShape(geo);
+                    _report.AddWarning(floor, "1 hatch line was rejected by Revit and left out");
+                    return;
                 }
-                catch (Exception ex)
-                {
-                    if (styleId != ElementId.InvalidElementId)
-                    {
-                        // Fall back to the plain Generic Models style rather than losing the pattern.
-                        try
-                        {
-                            var geo = MakeLines(chunks[i], ElementId.InvalidElementId);
-                            written = geo.Count;
-                            ds.SetShape(geo);
-                            _report.StyleFallbacks++;
-                        }
-                        catch (Exception ex2)
-                        {
-                            written = 0;
-                            _report.Errors.Add(FpfReport.Describe(floor) + ": SetShape failed - " + ex2.Message);
-                        }
-                    }
-                    else
-                    {
-                        written = 0;
-                        _report.Errors.Add(FpfReport.Describe(floor) + ": SetShape failed - " + ex.Message);
-                    }
-                }
-
-                var kind = layer?.Kind ?? PatternLayerKind.Foreground;
-                ConfigureShape(ds, floor, i, chunks.Count, _styles.GetTypeId(kind), kind.ToString());
-                shapes.Add(ds);
-                _report.Segments += written;
-                LastFloorSegments += written;
-                if (layer != null && layer.Kind == PatternLayerKind.Background) _report.BackgroundSegments += written;
+                var mid = segs.Count / 2;
+                CommitChunk(floor, segs.GetRange(0, mid), layer, existing, created, shapes);
+                CommitChunk(floor, segs.GetRange(mid, segs.Count - mid), layer, existing, created, shapes);
+                return;
             }
 
-            return shapes.Count;
+            var kind = layer?.Kind ?? PatternLayerKind.Foreground;
+            ConfigureShape(ds, floor, shapes.Count, shapes.Count + 1, _styles.GetTypeId(kind), kind.ToString());
+            shapes.Add(ds);
+            _report.Segments += segs.Count;
+            LastFloorSegments += segs.Count;
+            if (layer != null && layer.Kind == PatternLayerKind.Background) _report.BackgroundSegments += segs.Count;
+        }
+
+        private bool TrySetShape(DirectShape ds, List<Segment3> segs, ElementId styleId)
+        {
+            try
+            {
+                var geo = MakeLines(segs, styleId);
+                if (geo.Count == 0) return false;
+                ds.SetShape(geo);
+                return true;
+            }
+            catch
+            {
+                if (styleId != null && styleId != ElementId.InvalidElementId)
+                {
+                    try
+                    {
+                        var geo = MakeLines(segs, ElementId.InvalidElementId);
+                        if (geo.Count == 0) return false;
+                        ds.SetShape(geo);
+                        _report.StyleFallbacks++;
+                        return true;
+                    }
+                    catch { return false; }
+                }
+                return false;
+            }
         }
 
         private DirectShape CreateShape()
@@ -363,8 +441,14 @@ namespace FloorPatternFlattener.Services
             {
                 if (ds.ArePhasesModifiable())
                 {
-                    if (ds.CreatedPhaseId != floor.CreatedPhaseId) ds.CreatedPhaseId = floor.CreatedPhaseId;
-                    if (ds.DemolishedPhaseId != floor.DemolishedPhaseId) ds.DemolishedPhaseId = floor.DemolishedPhaseId;
+                    // Clear demolition first so a later created-phase is not rejected as "after demolition".
+                    var created = floor.CreatedPhaseId;
+                    var demo = floor.DemolishedPhaseId;
+                    var none = ElementId.InvalidElementId;
+                    if (ds.DemolishedPhaseId != none && ds.DemolishedPhaseId != demo)
+                        ds.DemolishedPhaseId = none;
+                    if (ds.CreatedPhaseId != created) ds.CreatedPhaseId = created;
+                    if (ds.DemolishedPhaseId != demo) ds.DemolishedPhaseId = demo;
                 }
             }
             catch { /* ignore - e.g. demolished before created while switching */ }

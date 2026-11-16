@@ -28,14 +28,20 @@ namespace FloorPatternFlattener.Services
 
         public List<string> NotEditable { get; } = new List<string>();
         public List<ElementId> NotEditableIds { get; } = new List<ElementId>();
-        public List<string> Truncated { get; } = new List<string>();
         public List<string> DefaultGrid { get; } = new List<string>();
         public List<string> DraftingScaled { get; } = new List<string>();
-        public List<string> NoTopFace { get; } = new List<string>();
+        public List<string> Skipped { get; } = new List<string>();
+        public List<string> Warnings { get; } = new List<string>();
+        /// <summary>Floors whose full hatch is large. Informational only: nothing is truncated or blocked.</summary>
+        public List<string> Heavy { get; } = new List<string>();
         public List<string> Errors { get; } = new List<string>();
 
         public bool HasProblems =>
-            NotEditable.Count > 0 || Truncated.Count > 0 || NoTopFace.Count > 0 || Errors.Count > 0 || SkippedGrids > 0;
+            NotEditable.Count > 0 || Skipped.Count > 0 || Warnings.Count > 0 || Errors.Count > 0 || SkippedGrids > 0;
+
+        public void AddSkipped(Element e, string reason) => Skipped.Add(Describe(e) + ": " + reason);
+
+        public void AddWarning(Element e, string reason) => Warnings.Add(Describe(e) + ": " + reason);
 
         public void AddNotEditable(Element e, string what)
         {
@@ -61,7 +67,10 @@ namespace FloorPatternFlattener.Services
             if (Unchanged > 0) sb.AppendLine("Already up to date: " + Unchanged);
             if (Cleared > 0) sb.AppendLine("Cleared: " + Cleared);
             if (Segments > 0) sb.AppendLine("Hatch line segments written: " + Segments +
-                                            (BackgroundSegments > 0 ? " (background pattern: " + BackgroundSegments + ")" : ""));
+                                            (BackgroundSegments > 0 ? " (background pattern: " + BackgroundSegments + ")" : "") +
+                                            " (full hatch, no segment limit)");
+
+            Section(sb, "Floors skipped", Skipped, 40);
             if (HideLiveChanged > 0)
                 sb.AppendLine("Live floor \"hide pattern\" mark changed on: " + HideLiveChanged + " floor(s)");
             if (LegacySurfaceReplaced > 0)
@@ -69,16 +78,16 @@ namespace FloorPatternFlattener.Services
             if (OrphansDeleted > 0) sb.AppendLine("Orphaned flat-pattern shapes removed: " + OrphansDeleted);
 
             Section(sb, "Skipped - not editable (worksharing: owned by another user or out of date; reload latest / request, then Refresh)", NotEditable);
-            Section(sb, "Hatch truncated at " + FpfOptions.MaxSegmentsPerFloor + " segments", Truncated);
+            Section(sb, "Heavy pattern (full hatch was still written, split across multiple shapes)", Heavy);
             Section(sb, "No pattern on material - default 300 mm grid used", DefaultGrid);
             Section(sb, "Drafting pattern converted at 1:" + FpfOptions.DraftingPatternScale, DraftingScaled);
-            Section(sb, "No upward-facing top face found", NoTopFace);
+            Section(sb, "Warnings", Warnings);
             Section(sb, "Errors", Errors);
 
             if (NonPlanarFaces > 0)
                 sb.AppendLine().AppendLine("Non-planar top faces approximated by triangulation: " + NonPlanarFaces);
             if (SkippedGrids > 0)
-                sb.AppendLine().AppendLine("Pattern grids skipped (too dense for the floor size): " + SkippedGrids);
+                sb.AppendLine().AppendLine("Pattern grids skipped (degenerate spacing): " + SkippedGrids);
             if (StyleFallbacks > 0)
                 sb.AppendLine().AppendLine("Shapes drawn without the FPF Pattern subcategory (style not accepted): " + StyleFallbacks);
             if (ViewFailures > 0)
@@ -88,11 +97,10 @@ namespace FloorPatternFlattener.Services
             return sb.ToString().TrimEnd();
         }
 
-        private static void Section(StringBuilder sb, string title, List<string> items)
+        private static void Section(StringBuilder sb, string title, List<string> items, int max = 15)
         {
             if (items.Count == 0) return;
             sb.AppendLine().AppendLine(title + ":");
-            var max = 15;
             for (var i = 0; i < items.Count && i < max; i++) sb.AppendLine("  - " + items[i]);
             if (items.Count > max) sb.AppendLine("  ... and " + (items.Count - max) + " more");
         }

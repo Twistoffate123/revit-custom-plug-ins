@@ -76,11 +76,6 @@ namespace FloorPatternFlattener.Commands
                             RollBackPreview();
                             if (!Build()) continue;
                         }
-                        if (_maxFloorSegments > FpfOptions.HeavyPatternConfirmSegments && !ConfirmHeavy())
-                        {
-                            try { _uidoc.RefreshActiveView(); } catch { /* ignore */ }
-                            continue; // back to the dialog with the preview still shown
-                        }
                         return Commit();
 
                     default: // Cancel / Discard / window closed
@@ -143,7 +138,10 @@ namespace FloorPatternFlattener.Commands
 
             _previewState = _state.Clone();
             _state.PreviewLive = true;
-            _state.Status = "Preview (not kept until Apply): " + Summary() + "\nPlacement: " + placement.Describe() + ".";
+            _state.Status = "Preview (not kept until Apply): " + Summary() + "\nPlacement: " + placement.Describe() + "." +
+                            (_report.Skipped.Count > 0
+                                ? "\nSkipped " + _report.Skipped.Count + " floor(s). Apply shows each id and the reason."
+                                : "");
             return true;
         }
 
@@ -154,20 +152,6 @@ namespace FloorPatternFlattener.Commands
                        ? " - heavy: " + _maxFloor + " has " + _maxFloorSegments.ToString("N0") + " lines"
                        : "") +
                    (_report.Unchanged > 0 ? " (" + _report.Unchanged + " already up to date)" : "");
-        }
-
-        private bool ConfirmHeavy()
-        {
-            var td = new TaskDialog(FpfOptions.ProductName)
-            {
-                MainInstruction = _maxFloor + " gets " + _maxFloorSegments.ToString("N0") + " lines.",
-                MainContent = "More than " + FpfOptions.HeavyPatternConfirmSegments.ToString("N0") +
-                              " modelled lines on one floor slow down views and file size. Is modelled geometry really " +
-                              "needed here? (A coarser pattern is lighter.)",
-                CommonButtons = TaskDialogCommonButtons.Yes | TaskDialogCommonButtons.No,
-                DefaultButton = TaskDialogResult.No
-            };
-            return td.Show() == TaskDialogResult.Yes;
         }
 
         private Result Commit()
@@ -188,7 +172,10 @@ namespace FloorPatternFlattener.Commands
                        "set the link to \"By Host View\" so its filters apply." +
                        (_state.HideLive ? "\n\nLive pattern hiding: run Flat Pattern Filters in the sheet file (adds \"" +
                                           FpfOptions.FilterLiveFloorName + "\" with its overrides; tick the fold-lines option)." : "");
-            CommandSupport.Show(_state.Title, report,
+            var title = _state.Title;
+            if (report.Skipped.Count > 0)
+                title += " (" + report.Skipped.Count + " floor(s) skipped)";
+            CommandSupport.Show(title, report,
                 Summary() + "\nPlacement: " + _state.Placement.Describe() + ".\nEach floor keeps its style, rotation and " +
                 "anchor for Refresh, Update and automatic rebuilds.\n\n" + hint);
             return Result.Succeeded;

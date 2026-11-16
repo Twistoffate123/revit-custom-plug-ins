@@ -20,6 +20,7 @@ Directory.Build.props.user
 *.pdb
 *.dll
 !**/packages/**
+!**/dist/**/*.dll
 
 ## OS / IDE
 .DS_Store
