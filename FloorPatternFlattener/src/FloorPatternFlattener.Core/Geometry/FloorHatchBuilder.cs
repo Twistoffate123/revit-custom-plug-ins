@@ -46,6 +46,9 @@ namespace FloorPatternFlattener.Geometry
         /// <summary>Top-surface boundary from Revit face edge loops only (never triangle interior edges).</summary>
         public List<BoundaryEdge> BoundaryEdges { get; } = new List<BoundaryEdge>();
 
+        /// <summary>Closed loops chained from each top face <see cref="Face.EdgeLoops"/> in edge order (edge authority).</summary>
+        internal List<AuthorityBoundaryLoop> AuthorityBoundaryLoops { get; } = new List<AuthorityBoundaryLoop>();
+
         /// <summary>Set when no upward face could be used. The floor is skipped and this text is shown.</summary>
         public string FailureReason { get; set; }
 
@@ -75,6 +78,17 @@ namespace FloorPatternFlattener.Geometry
     {
         public double X1, Y1, X2, Y2;
         public TopPiece Piece;
+    }
+
+    internal sealed class AuthorityBoundaryLoop
+    {
+        public List<Pt2> Points { get; } = new List<Pt2>();
+        public TopPiece Piece;
+    }
+
+    internal struct Pt2
+    {
+        public double X, Y;
     }
 
     public sealed class FloorHatchResult
@@ -488,15 +502,85 @@ namespace FloorPatternFlattener.Geometry
         private static void AddSurfaceBoundaryEdges(Face face, TopPiece piece, FloorHatchInput input)
         {
             if (face?.EdgeLoops == null || piece == null) return;
-            foreach (EdgeArray loop in face.EdgeLoops)
+            var weld = FpfOptions.MeshCrackBridgeFeet;
+            foreach (EdgeArray edgeLoop in face.EdgeLoops)
             {
-                foreach (Edge edge in loop)
+                var poly = new List<Pt2>();
+                foreach (Edge edge in edgeLoop)
                 {
                     var pts = edge.Tessellate();
                     if (pts == null) continue;
                     AppendBoundaryLoopEdges(pts, piece, input);
+                    for (var i = 0; i < pts.Count; i++)
+                        AddAuthorityLoopPoint(poly, pts[i].X, pts[i].Y, weld);
                 }
+                if (poly.Count >= 3)
+                    TryRegisterAuthorityLoop(input, poly, piece);
             }
+        }
+
+        private static void AddAuthorityLoopPoint(List<Pt2> poly, double x, double y, double weld)
+        {
+            if (poly.Count > 0)
+            {
+                var last = poly[poly.Count - 1];
+                if (Math.Abs(last.X - x) <= weld && Math.Abs(last.Y - y) <= weld) return;
+            }
+            poly.Add(new Pt2 { X = x, Y = y });
+        }
+
+        private static void TryRegisterAuthorityLoop(FloorHatchInput input, List<Pt2> poly, TopPiece piece)
+        {
+            if (poly.Count < 3) return;
+            var weld = FpfOptions.MeshCrackBridgeFeet;
+            if (poly.Count == 3)
+            {
+                var area = Math.Abs((poly[1].X - poly[0].X) * (poly[2].Y - poly[0].Y) -
+                                    (poly[2].X - poly[0].X) * (poly[1].Y - poly[0].Y)) * 0.5;
+                if (area < 1.0) return;
+            }
+            if (poly.Count >= 3 &&
+                Math.Abs(poly[0].X - poly[poly.Count - 1].X) <= weld &&
+                Math.Abs(poly[0].Y - poly[poly.Count - 1].Y) <= weld)
+                poly.RemoveAt(poly.Count - 1);
+            var sig = AuthorityLoopSignature(poly, weld);
+            foreach (var existing in input.AuthorityBoundaryLoops)
+            {
+                if (existing == null) continue;
+                if (AuthorityLoopSignature(existing.Points, weld) == sig) return;
+            }
+            var loop = new AuthorityBoundaryLoop { Piece = piece };
+            loop.Points.AddRange(poly);
+            input.AuthorityBoundaryLoops.Add(loop);
+        }
+
+        private static string AuthorityLoopSignature(List<Pt2> poly, double weld)
+        {
+            var n = poly.Count;
+            if (n == 0) return string.Empty;
+            var best = string.Empty;
+            for (var start = 0; start < n; start++)
+            {
+                var sb = new StringBuilder(n * 12);
+                for (var i = 0; i < n; i++)
+                {
+                    var p = poly[(start + i) % n];
+                    sb.Append((long)Math.Round(p.X / weld)).Append(',')
+                        .Append((long)Math.Round(p.Y / weld)).Append(';');
+                }
+                var s = sb.ToString();
+                var rev = new StringBuilder(n * 12);
+                for (var i = n - 1; i >= 0; i--)
+                {
+                    var p = poly[(start + i) % n];
+                    rev.Append((long)Math.Round(p.X / weld)).Append(',')
+                        .Append((long)Math.Round(p.Y / weld)).Append(';');
+                }
+                var sr = rev.ToString();
+                if (best.Length == 0 || string.CompareOrdinal(s, best) < 0) best = s;
+                if (string.CompareOrdinal(sr, best) < 0) best = sr;
+            }
+            return best;
         }
 
         /// <summary>Merge collinear tessellation chords on one Revit edge only; never skip or dedupe across faces.</summary>
@@ -824,7 +908,7 @@ namespace FloorPatternFlattener.Geometry
                     PolygonClipper.ApplyDashes(merged, g.Dashes, dotLen, dashed);
                     covers.Sort((a, b) => a.T0.CompareTo(b.T0));
                     for (var d = 0; d < dashed.Count; d++)
-                        EmitDash(result, layer, dashed[d][0], dashed[d][1], covers, px, py, dx, dy, minLen);
+                        EmitDash(result, layer, dashed[d][0], dashed[d][1], covers, px, py, dx, dy, minLen, pieces);
                 }
             }
         }
@@ -874,7 +958,7 @@ namespace FloorPatternFlattener.Geometry
         }
 
         private static void EmitDash(FloorHatchResult result, PatternLayer layer, double t0, double t1,
-            List<Cover> covers, double px, double py, double dx, double dy, double minLen)
+            List<Cover> covers, double px, double py, double dx, double dy, double minLen, List<TopPiece> pieces)
         {
             if (t1 - t0 <= FpfOptions.GeometryTolerance) return;
             var events = new List<double> { t0, t1 };
@@ -914,20 +998,48 @@ namespace FloorPatternFlattener.Geometry
                     prev = null;
                     continue;
                 }
-                if (poly.Count == 0) poly.Add(Lift(a, best, px, py, dx, dy));
-                poly.Add(Lift(b, best, px, py, dx, dy));
+                if (poly.Count == 0) poly.Add(LiftHatch(a, best, layer, px, py, dx, dy, pieces));
+                poly.Add(LiftHatch(b, best, layer, px, py, dx, dy, pieces));
                 prev = best;
             }
             Flush(result, layer, poly, minLen, null);
         }
 
-        private static XYZ Lift(double t, TopPiece piece, double px, double py, double dx, double dy)
+        /// <summary>Lifts hatch lines above the live top so foreground and background both clear the surface pattern (+Z min clearance).</summary>
+        private static XYZ LiftHatch(double t, TopPiece piece, PatternLayer layer, double px, double py, double dx, double dy,
+            List<TopPiece> pieces)
         {
             var x = px + dx * t;
             var y = py + dy * t;
+            piece = HighestPieceAt(pieces, x, y) ?? piece;
             var z = piece.ZAt(x, y);
             var o = FpfOptions.SurfaceOffsetFeet;
-            return new XYZ(x + piece.Nx * o, y + piece.Ny * o, z + piece.Nz * o);
+            var ox = piece.Nx * o;
+            var oy = piece.Ny * o;
+            var oz = piece.Nz * o;
+            var minLift = z + o;
+            var zOut = z + oz;
+            if (zOut + 1.0e-9 < minLift)
+                oz += minLift - zOut;
+            return new XYZ(x + ox, y + oy, z + oz);
+        }
+
+        private static TopPiece HighestPieceAt(List<TopPiece> pieces, double x, double y)
+        {
+            if (pieces == null) return null;
+            TopPiece best = null;
+            var bestZ = double.NegativeInfinity;
+            var tol = FpfOptions.MeshCrackBridgeFeet;
+            for (var i = 0; i < pieces.Count; i++)
+            {
+                var p = pieces[i];
+                var r = p?.Region;
+                if (r == null || r.IsEmpty) continue;
+                if (x < r.MinX - tol || x > r.MaxX + tol || y < r.MinY - tol || y > r.MaxY + tol) continue;
+                var z = p.ZAt(x, y);
+                if (z > bestZ) { bestZ = z; best = p; }
+            }
+            return best;
         }
 
         /// <summary>
@@ -1131,7 +1243,7 @@ namespace FloorPatternFlattener.Geometry
             }
 
             ClipHatchToInset(result, cleaned, closed, minLen);
-            EmitBoundary(cleaned, closed, input.Pieces, minLen, boundary, result.Segments);
+            EmitAuthorityEdgeLoops(input, minLen, result.Segments);
         }
 
         /// <summary>Drops a shorter edge that lies on top of a longer one (the usual cause of a thick/thin outline).</summary>
@@ -1421,33 +1533,31 @@ namespace FloorPatternFlattener.Geometry
             return Math.Sqrt(dx * dx + dy * dy);
         }
 
-        /// <summary>Consecutive loop segments only; each must lie on a silhouette boundary edge.</summary>
-        private static void EmitBoundary(List<List<Pt2>> loops, List<bool> closedFlags, List<TopPiece> pieces,
-            double minLen, List<BEdge> allowedBoundary, List<Segment3> target)
+        /// <summary>Closed loops from top-face EdgeLoops only (consecutive vertices; collinear merge on same loop).</summary>
+        private static void EmitAuthorityEdgeLoops(FloorHatchInput input, double minLen, List<Segment3> target)
         {
+            var pieces = input.Pieces;
             var cornerRad = 2.0 * Math.PI / 180.0;
             var runId = 0;
-            for (var li = 0; li < loops.Count; li++)
+            foreach (var auth in input.AuthorityBoundaryLoops)
             {
-                var loop = MergeConsecutiveCollinearInLoop(loops[li], li < closedFlags.Count && closedFlags[li]);
+                if (auth?.Points == null || auth.Points.Count < 2) continue;
+                var loop = MergeConsecutiveCollinearInLoop(auth.Points, true);
                 if (loop.Count < 2) continue;
-                var closed = li < closedFlags.Count && closedFlags[li];
                 var n = loop.Count;
-                var count = closed ? n : n - 1;
                 var sideRun = ++runId;
-                for (var i = 0; i < count; i++)
+                var defPiece = auth.Piece;
+                for (var i = 0; i < n; i++)
                 {
                     var prev = loop[(i + n - 1) % n];
                     var cur = loop[i];
                     var next = loop[(i + 1) % n];
-                    if ((i > 0 || closed) && TurnAngle(prev, cur, next) >= cornerRad)
+                    if (i > 0 && TurnAngle(prev, cur, next) >= cornerRad)
                         sideRun = ++runId;
                     var aPt = loop[i];
                     var bPt = loop[(i + 1) % n];
-                    if (!LiesOnAllowedBoundary(aPt.X, aPt.Y, bPt.X, bPt.Y, allowedBoundary))
-                        continue;
-                    var pieceA = PieceNearest(pieces, aPt.X, aPt.Y);
-                    var pieceB = PieceNearest(pieces, bPt.X, bPt.Y);
+                    var pieceA = PieceNearest(pieces, aPt.X, aPt.Y) ?? defPiece;
+                    var pieceB = PieceNearest(pieces, bPt.X, bPt.Y) ?? defPiece;
                     var a = pieceA == null ? new XYZ(aPt.X, aPt.Y, 0) : LiftXY(aPt.X, aPt.Y, pieceA);
                     var b = pieceB == null ? new XYZ(bPt.X, bPt.Y, 0) : LiftXY(bPt.X, bPt.Y, pieceB);
                     if (a.DistanceTo(b) < minLen) continue;
@@ -1475,22 +1585,6 @@ namespace FloorPatternFlattener.Geometry
             for (var i = 0; i < n; i++)
                 if (keep[i]) merged.Add(loop[i]);
             return merged.Count >= 2 ? merged : loop;
-        }
-
-        private static bool LiesOnAllowedBoundary(double x1, double y1, double x2, double y2, List<BEdge> allowed)
-        {
-            if (allowed == null || allowed.Count == 0) return false;
-            var tol = FpfOptions.BoundaryOverlapFeet;
-            var segLen = Math.Sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1));
-            if (segLen < 1.0e-12) return false;
-            for (var i = 0; i < allowed.Count; i++)
-            {
-                var e = allowed[i];
-                if (!PolygonClipper.CollinearOverlap(x1, y1, x2, y2, e.X1, e.Y1, e.X2, e.Y2, tol,
-                        out var lo, out var hi)) continue;
-                if (hi - lo >= segLen * 0.85) return true;
-            }
-            return false;
         }
 
         private static double TurnAngle(Pt2 prev, Pt2 cur, Pt2 next)
@@ -1680,11 +1774,6 @@ namespace FloorPatternFlattener.Geometry
                     region.AddEdge(a.X, a.Y, b.X, b.Y);
                 }
             }
-        }
-
-        private sealed class Pt2
-        {
-            public double X, Y;
         }
 
         private struct WeldKey : IEquatable<WeldKey>

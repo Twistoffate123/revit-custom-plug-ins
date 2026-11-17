@@ -364,7 +364,8 @@ namespace FloorPatternFlattener.Services
             }
 
             var kind = layer?.Kind ?? PatternLayerKind.Foreground;
-            ConfigureShape(ds, floor, shapes.Count, shapes.Count + 1, _styles.GetTypeId(kind), kind.ToString());
+            ConfigureShape(ds, floor, shapes.Count, shapes.Count + 1, _styles.GetFloorLayerTypeId(floor, kind),
+                FpfFloorNaming.LayerLabel(kind));
             shapes.Add(ds);
             _report.Segments += segs.Count;
             LastFloorSegments += segs.Count;

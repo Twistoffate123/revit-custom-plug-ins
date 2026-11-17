@@ -73,7 +73,7 @@ namespace FloorPatternFlattener
         public const string DirectShapeNamePrefix = "Flat Pattern - Floor ";
 
         /// <summary>Bump when hatch generation changes so stored signatures no longer match.</summary>
-        public const int AlgorithmVersion = 10; // 10: restore silhouette edges; drop false diagonals
+        public const int AlgorithmVersion = 11; // 11: edge loops authority; hatch Z lift; floor DS types
 
         /// <summary>Extensible storage schema version written into every entity.</summary>
         public const int SchemaDataVersion = 1;

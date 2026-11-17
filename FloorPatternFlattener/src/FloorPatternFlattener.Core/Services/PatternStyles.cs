@@ -90,6 +90,19 @@ namespace FloorPatternFlattener.Services
         /// <summary>DirectShapeType for the layer kind (created on first use), or InvalidElementId.</summary>
         public ElementId GetTypeId(PatternLayerKind kind) => GetTypeIdByName(TypeName(kind));
 
+        /// <summary>One DirectShapeType per floor and layer; type name shows the floor, type comments keep filter rules.</summary>
+        public ElementId GetFloorLayerTypeId(Floor floor, PatternLayerKind kind)
+        {
+            if (floor == null) return GetTypeId(kind);
+            var displayName = FpfFloorNaming.DirectShapeTypeName(floor, kind);
+            var filterTag = TypeName(kind);
+            var cacheKey = floor.UniqueId + "|" + (int)kind;
+            if (_typeByName.TryGetValue(cacheKey, out var cached)) return cached;
+            var id = EnsureDirectShapeType(displayName, filterTag);
+            _typeByName[cacheKey] = id;
+            return id;
+        }
+
         private ElementId GetTypeIdByName(string name)
         {
             if (_typeByName.TryGetValue(name, out var cached)) return cached;
@@ -108,19 +121,7 @@ namespace FloorPatternFlattener.Services
                 }
 
                 if (id == ElementId.InvalidElementId)
-                {
-                    var t = DirectShapeType.Create(_doc, name, catId);
-                    if (t != null)
-                    {
-                        id = t.Id;
-                        try
-                        {
-                            var p = t.get_Parameter(BuiltInParameter.ALL_MODEL_TYPE_COMMENTS);
-                            if (p != null && !p.IsReadOnly) p.Set(name);
-                        }
-                        catch { /* ignore */ }
-                    }
-                }
+                    id = EnsureDirectShapeType(name, name);
             }
             catch
             {
@@ -128,6 +129,46 @@ namespace FloorPatternFlattener.Services
             }
 
             _typeByName[name] = id;
+            return id;
+        }
+
+        private ElementId EnsureDirectShapeType(string displayName, string typeComments)
+        {
+            var catId = new ElementId(BuiltInCategory.OST_GenericModel);
+            var id = ElementId.InvalidElementId;
+            try
+            {
+                foreach (var el in new FilteredElementCollector(_doc).OfClass(typeof(DirectShapeType)))
+                {
+                    if (el is DirectShapeType t && t.Category != null && t.Category.Id == catId &&
+                        string.Equals(t.Name, displayName, StringComparison.Ordinal))
+                    {
+                        id = t.Id;
+                        break;
+                    }
+                }
+
+                if (id == ElementId.InvalidElementId)
+                {
+                    var t = DirectShapeType.Create(_doc, displayName, catId);
+                    if (t != null) id = t.Id;
+                }
+
+                if (id != ElementId.InvalidElementId && !string.IsNullOrEmpty(typeComments))
+                {
+                    try
+                    {
+                        var t = _doc.GetElement(id) as DirectShapeType;
+                        var p = t?.get_Parameter(BuiltInParameter.ALL_MODEL_TYPE_COMMENTS);
+                        if (p != null && !p.IsReadOnly) p.Set(typeComments);
+                    }
+                    catch { /* ignore */ }
+                }
+            }
+            catch
+            {
+                id = ElementId.InvalidElementId;
+            }
             return id;
         }
     }

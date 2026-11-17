@@ -1,4 +1,5 @@
 using Autodesk.Revit.DB;
+using FloorPatternFlattener.Geometry;
 
 namespace FloorPatternFlattener.Services
 {
@@ -30,6 +31,17 @@ namespace FloorPatternFlattener.Services
         public static string CommentsValue(Floor floor) => FpfOptions.CommentsTag + " | " + BaseName(floor);
 
         public static string GroupTypeName(Floor floor) => BaseName(floor) + " pattern";
+
+        /// <summary>Type selector name: floor label plus hatch layer (shown in Properties / tags).</summary>
+        public static string DirectShapeTypeName(Floor floor, PatternLayerKind kind) =>
+            BaseName(floor) + " - " + LayerLabel(kind);
+
+        public static string LayerLabel(PatternLayerKind kind)
+        {
+            if (kind == PatternLayerKind.Background) return "Background";
+            if (kind == PatternLayerKind.Edge) return "Edge";
+            return "Foreground";
+        }
 
         private static string SafeMark(Floor floor)
         {
