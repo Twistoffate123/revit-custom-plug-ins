@@ -224,7 +224,7 @@ namespace FloorPatternFlattener.Services
                 _report.Heavy.Add(FpfReport.Describe(floor) + ": " + LastFloorSegments.ToString("N0") +
                     " lines in " + shapes.Count + " DirectShape(s) (hatch chunked, edges one per line).");
 
-            TryGroupPatternShapes(shapes);
+            TryGroupPatternShapes(floor, shapes);
 
             // ---- floor link (written last; signature guards the updater against re-trigger loops)
             if (style != storedStyle || legacySurface) FpfStorage.WriteStyle(floor, style);
@@ -412,7 +412,7 @@ namespace FloorPatternFlattener.Services
         /// Optional one model group per floor so Move/Rotate can target all hatch chunks at once.
         /// Skipped when there are many shapes (grouping can be slow); each chunk still moves as a unit.
         /// </summary>
-        private void TryGroupPatternShapes(List<DirectShape> shapes)
+        private void TryGroupPatternShapes(Floor floor, List<DirectShape> shapes)
         {
             if (shapes == null || shapes.Count < 2 || shapes.Count > 64) return;
             try
@@ -423,7 +423,11 @@ namespace FloorPatternFlattener.Services
                     if (ds != null && ds.IsValidObject) ids.Add(ds.Id);
                 }
                 if (ids.Count < 2) return;
-                _doc.Create.NewGroup(ids);
+                var group = _doc.Create.NewGroup(ids);
+                var typeId = group?.GroupType?.Id ?? ElementId.InvalidElementId;
+                var gt = typeId != ElementId.InvalidElementId ? _doc.GetElement(typeId) as GroupType : null;
+                if (gt != null)
+                    gt.Name = FpfFloorNaming.GroupTypeName(floor);
             }
             catch
             {
@@ -485,13 +489,13 @@ namespace FloorPatternFlattener.Services
 
             try
             {
-                var name = FpfOptions.DirectShapeNamePrefix + floor.Id + " " + label +
-                           (chunkCount > 1 ? " (" + (chunkIndex + 1) + "/" + chunkCount + ")" : string.Empty);
-                ds.SetName(name);
+                var baseName = FpfFloorNaming.BaseName(floor);
+                var suffix = chunkCount > 1 ? " (" + (chunkIndex + 1) + "/" + chunkCount + ")" : string.Empty;
+                ds.SetName(baseName + " - " + label + suffix);
             }
             catch { /* ignore */ }
 
-            SetString(ds, BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS, FpfOptions.CommentsTag);
+            SetString(ds, BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS, FpfFloorNaming.CommentsValue(floor));
 
             // Phases: match the floor.
             try

@@ -46,9 +46,6 @@ namespace FloorPatternFlattener.Geometry
         /// <summary>Top-surface boundary from Revit face edge loops only (never triangle interior edges).</summary>
         public List<BoundaryEdge> BoundaryEdges { get; } = new List<BoundaryEdge>();
 
-        /// <summary>Welded keys so the same tessellated edge is not added from every top-face fragment.</summary>
-        internal HashSet<long> BoundaryEdgeKeys { get; } = new HashSet<long>();
-
         /// <summary>Set when no upward face could be used. The floor is skipped and this text is shown.</summary>
         public string FailureReason { get; set; }
 
@@ -496,17 +493,18 @@ namespace FloorPatternFlattener.Geometry
                 foreach (Edge edge in loop)
                 {
                     var pts = edge.Tessellate();
-                    if (pts == null || pts.Count < 2) continue;
-                    AppendMergedTessellatedEdges(pts, piece, input);
+                    if (pts == null) continue;
+                    AppendBoundaryLoopEdges(pts, piece, input);
                 }
             }
         }
 
-        private static void AppendMergedTessellatedEdges(IList<XYZ> pts, TopPiece piece, FloorHatchInput input)
+        /// <summary>Merge collinear tessellation chords on one Revit edge only; never skip or dedupe across faces.</summary>
+        private static void AppendBoundaryLoopEdges(IList<XYZ> pts, TopPiece piece, FloorHatchInput input)
         {
+            if (pts == null || pts.Count < 2) return;
             var col = 0.5 / 304.8;
-            var w = FpfOptions.MeshCrackBridgeFeet;
-            int runStart = 0;
+            var runStart = 0;
             for (var i = 1; i < pts.Count; i++)
             {
                 var isEnd = i + 1 >= pts.Count;
@@ -520,7 +518,7 @@ namespace FloorPatternFlattener.Geometry
                     runStart = i;
                     continue;
                 }
-                TryAddBoundaryEdge(input, piece, x1, y1, x2, y2, w);
+                input.BoundaryEdges.Add(new BoundaryEdge { X1 = x1, Y1 = y1, X2 = x2, Y2 = y2, Piece = piece });
                 runStart = i;
             }
         }
@@ -537,29 +535,9 @@ namespace FloorPatternFlattener.Geometry
             return cross / Math.Sqrt(len2) <= tol;
         }
 
-        private static void TryAddBoundaryEdge(FloorHatchInput input, TopPiece piece,
-            double x1, double y1, double x2, double y2, double weld)
+        private static bool CollinearPt2(Pt2 a, Pt2 b, Pt2 c, double tol)
         {
-            var key = BoundaryEdgeKey(x1, y1, x2, y2, weld);
-            if (!input.BoundaryEdgeKeys.Add(key)) return;
-            input.BoundaryEdges.Add(new BoundaryEdge { X1 = x1, Y1 = y1, X2 = x2, Y2 = y2, Piece = piece });
-        }
-
-        private static long BoundaryEdgeKey(double x1, double y1, double x2, double y2, double weld)
-        {
-            var ax = (long)Math.Round(x1 / weld);
-            var ay = (long)Math.Round(y1 / weld);
-            var bx = (long)Math.Round(x2 / weld);
-            var by = (long)Math.Round(y2 / weld);
-            if (ax > bx || (ax == bx && ay > by))
-            {
-                var t = ax; ax = bx; bx = t;
-                t = ay; ay = by; by = t;
-            }
-            unchecked
-            {
-                return (ax * 73856093L) ^ (ay * 19349663L) ^ (bx * 83492791L) ^ (by * 28348193L);
-            }
+            return CollinearXY(new XYZ(a.X, a.Y, 0), new XYZ(b.X, b.Y, 0), new XYZ(c.X, c.Y, 0), tol);
         }
 
         /// <summary>All edge loops (outer + inner) of a face, tessellated, projected to XY.</summary>
@@ -1153,7 +1131,7 @@ namespace FloorPatternFlattener.Geometry
             }
 
             ClipHatchToInset(result, cleaned, closed, minLen);
-            EmitBoundary(cleaned, closed, input.Pieces, minLen, result.Segments);
+            EmitBoundary(cleaned, closed, input.Pieces, minLen, boundary, result.Segments);
         }
 
         /// <summary>Drops a shorter edge that lies on top of a longer one (the usual cause of a thick/thin outline).</summary>
@@ -1443,76 +1421,76 @@ namespace FloorPatternFlattener.Geometry
             return Math.Sqrt(dx * dx + dy * dy);
         }
 
-        /// <summary>Corner spans become one straight segment; curved tessellation stays one edge run (one DirectShape).</summary>
-        private static void EmitBoundary(List<List<Pt2>> loops, List<bool> closedFlags, List<TopPiece> pieces, double minLen, List<Segment3> target)
+        /// <summary>Consecutive loop segments only; each must lie on a silhouette boundary edge.</summary>
+        private static void EmitBoundary(List<List<Pt2>> loops, List<bool> closedFlags, List<TopPiece> pieces,
+            double minLen, List<BEdge> allowedBoundary, List<Segment3> target)
         {
             var cornerRad = 2.0 * Math.PI / 180.0;
-            var nextRun = 1;
+            var runId = 0;
             for (var li = 0; li < loops.Count; li++)
             {
-                var loop = loops[li];
+                var loop = MergeConsecutiveCollinearInLoop(loops[li], li < closedFlags.Count && closedFlags[li]);
                 if (loop.Count < 2) continue;
                 var closed = li < closedFlags.Count && closedFlags[li];
-                var corners = CornerIndices(loop, closed, cornerRad);
-                if (corners.Count < 2) continue;
-                var spanCount = closed ? corners.Count : corners.Count - 1;
-                for (var s = 0; s < spanCount; s++)
+                var n = loop.Count;
+                var count = closed ? n : n - 1;
+                var sideRun = ++runId;
+                for (var i = 0; i < count; i++)
                 {
-                    var i0 = corners[s];
-                    var i1 = corners[(s + 1) % corners.Count];
-                    var runId = nextRun++;
-                    if (i0 == i1) continue;
-                    if (i0 < i1)
-                    {
-                        for (var i = i0; i < i1; i++)
-                            TryAddBoundarySpan(loop, i, pieces, minLen, target, runId);
-                    }
-                    else
-                    {
-                        for (var i = i0; i < loop.Count; i++)
-                            TryAddBoundarySpan(loop, i, pieces, minLen, target, runId);
-                        for (var i = 0; i < i1; i++)
-                            TryAddBoundarySpan(loop, i, pieces, minLen, target, runId);
-                    }
+                    var prev = loop[(i + n - 1) % n];
+                    var cur = loop[i];
+                    var next = loop[(i + 1) % n];
+                    if ((i > 0 || closed) && TurnAngle(prev, cur, next) >= cornerRad)
+                        sideRun = ++runId;
+                    var aPt = loop[i];
+                    var bPt = loop[(i + 1) % n];
+                    if (!LiesOnAllowedBoundary(aPt.X, aPt.Y, bPt.X, bPt.Y, allowedBoundary))
+                        continue;
+                    var pieceA = PieceNearest(pieces, aPt.X, aPt.Y);
+                    var pieceB = PieceNearest(pieces, bPt.X, bPt.Y);
+                    var a = pieceA == null ? new XYZ(aPt.X, aPt.Y, 0) : LiftXY(aPt.X, aPt.Y, pieceA);
+                    var b = pieceB == null ? new XYZ(bPt.X, bPt.Y, 0) : LiftXY(bPt.X, bPt.Y, pieceB);
+                    if (a.DistanceTo(b) < minLen) continue;
+                    target.Add(new Segment3 { A = a, B = b, Layer = EdgeLayer, EdgeRun = sideRun });
                 }
             }
         }
 
-        private static void TryAddBoundarySpan(List<Pt2> loop, int i, List<TopPiece> pieces, double minLen,
-            List<Segment3> target, int runId)
+        private static List<Pt2> MergeConsecutiveCollinearInLoop(List<Pt2> loop, bool closed)
         {
-            var aPt = loop[i];
-            var bPt = loop[(i + 1) % loop.Count];
-            var pieceA = PieceNearest(pieces, aPt.X, aPt.Y);
-            var pieceB = PieceNearest(pieces, bPt.X, bPt.Y);
-            var a = pieceA == null ? new XYZ(aPt.X, aPt.Y, 0) : LiftXY(aPt.X, aPt.Y, pieceA);
-            var b = pieceB == null ? new XYZ(bPt.X, bPt.Y, 0) : LiftXY(bPt.X, bPt.Y, pieceB);
-            if (a.DistanceTo(b) < minLen) return;
-            target.Add(new Segment3 { A = a, B = b, Layer = EdgeLayer, EdgeRun = runId });
-        }
-
-        private static List<int> CornerIndices(List<Pt2> loop, bool closed, double minTurnRad)
-        {
+            if (loop == null || loop.Count < 3) return loop;
+            var col = 0.5 / 304.8;
             var n = loop.Count;
-            var corners = new List<int>();
-            if (n < 2) return corners;
-            if (!closed)
-            {
-                corners.Add(0);
-                for (var i = 1; i < n - 1; i++)
-                    if (TurnAngle(loop[i - 1], loop[i], loop[i + 1]) >= minTurnRad) corners.Add(i);
-                corners.Add(n - 1);
-                return corners;
-            }
+            var keep = new bool[n];
+            for (var i = 0; i < n; i++) keep[i] = true;
             for (var i = 0; i < n; i++)
             {
+                if (!closed && (i == 0 || i == n - 1)) continue;
                 var prev = loop[(i + n - 1) % n];
                 var cur = loop[i];
                 var next = loop[(i + 1) % n];
-                if (TurnAngle(prev, cur, next) >= minTurnRad) corners.Add(i);
+                if (CollinearPt2(prev, cur, next, col)) keep[i] = false;
             }
-            if (corners.Count == 0) corners.Add(0);
-            return corners;
+            var merged = new List<Pt2>(n);
+            for (var i = 0; i < n; i++)
+                if (keep[i]) merged.Add(loop[i]);
+            return merged.Count >= 2 ? merged : loop;
+        }
+
+        private static bool LiesOnAllowedBoundary(double x1, double y1, double x2, double y2, List<BEdge> allowed)
+        {
+            if (allowed == null || allowed.Count == 0) return false;
+            var tol = FpfOptions.BoundaryOverlapFeet;
+            var segLen = Math.Sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1));
+            if (segLen < 1.0e-12) return false;
+            for (var i = 0; i < allowed.Count; i++)
+            {
+                var e = allowed[i];
+                if (!PolygonClipper.CollinearOverlap(x1, y1, x2, y2, e.X1, e.Y1, e.X2, e.Y2, tol,
+                        out var lo, out var hi)) continue;
+                if (hi - lo >= segLen * 0.85) return true;
+            }
+            return false;
         }
 
         private static double TurnAngle(Pt2 prev, Pt2 cur, Pt2 next)
