@@ -187,6 +187,8 @@ namespace FloorPatternFlattener.Services
                 _report.AddWarning(floor, build.SkippedShort + " degenerate fragments could not be stored");
             foreach (var n in build.Notes) _report.AddWarning(floor, n);
 
+            DissolvePatternGroups(existing);
+
             if (legacySurface)
             {
                 // The old surface DirectShape (type "FPF Flat Pattern - Surface") is not reused: delete it so the
@@ -198,6 +200,20 @@ namespace FloorPatternFlattener.Services
                 }
                 existing = new List<DirectShape>();
                 _report.LegacySurfaceReplaced++;
+            }
+
+            {
+                var angleCheck = PatternAngleMatcher.VerifyAndCorrect(floor, input, build, placement, _doc);
+                _report.PatternAngles.Add(PatternAngleMatcher.FormatForReport(floor, angleCheck));
+                if (angleCheck.Corrected)
+                {
+                    placementChanged = true;
+                    _currentPlacement = placement;
+                    build = FloorHatchBuilder.Build(input, _doc.Application.ShortCurveTolerance, placement);
+                    PatternAngleMatcher.RefreshFlatFromBuild(build, angleCheck);
+                    _report.PatternAngles[_report.PatternAngles.Count - 1] =
+                        PatternAngleMatcher.FormatForReport(floor, angleCheck);
+                }
             }
 
             var shapes = new List<DirectShape>();
@@ -409,21 +425,43 @@ namespace FloorPatternFlattener.Services
             return ds;
         }
 
-        /// <summary>
-        /// Optional one model group per floor so Move/Rotate can target all hatch chunks at once.
-        /// Skipped when there are many shapes (grouping can be slow); each chunk still moves as a unit.
-        /// </summary>
+        /// <summary>Ungroup so old flat-pattern shapes can be deleted or replaced on Refresh.</summary>
+        private void DissolvePatternGroups(IEnumerable<DirectShape> shapes)
+        {
+            if (shapes == null) return;
+            var groupIds = new HashSet<ElementId>();
+            foreach (var ds in shapes)
+            {
+                if (ds == null || !ds.IsValidObject) continue;
+                try
+                {
+                    var gid = ds.GroupId;
+                    if (gid != null && gid != ElementId.InvalidElementId) groupIds.Add(gid);
+                }
+                catch { /* ignore */ }
+            }
+            foreach (var gid in groupIds)
+            {
+                try
+                {
+                    if (_doc.GetElement(gid) is Group g) g.UngroupMembers();
+                }
+                catch { /* ignore */ }
+            }
+        }
+
+        /// <summary>One model group per floor (all hatch chunks and edges) named with the floor label.</summary>
         private void TryGroupPatternShapes(Floor floor, List<DirectShape> shapes)
         {
-            if (shapes == null || shapes.Count < 2 || shapes.Count > 64) return;
+            if (shapes == null || shapes.Count == 0) return;
             try
             {
-                var ids = new List<ElementId>();
+                var ids = new List<ElementId>(shapes.Count);
                 foreach (var ds in shapes)
                 {
                     if (ds != null && ds.IsValidObject) ids.Add(ds.Id);
                 }
-                if (ids.Count < 2) return;
+                if (ids.Count == 0) return;
                 var group = _doc.Create.NewGroup(ids);
                 var typeId = group?.GroupType?.Id ?? ElementId.InvalidElementId;
                 var gt = typeId != ElementId.InvalidElementId ? _doc.GetElement(typeId) as GroupType : null;
@@ -609,7 +647,11 @@ namespace FloorPatternFlattener.Services
                 }
             }
 
-            if (shapes.Count > 0) _doc.Delete(shapes.Keys.ToList());
+            if (shapes.Count > 0)
+            {
+                DissolvePatternGroups(shapes.Values);
+                _doc.Delete(shapes.Keys.ToList());
+            }
             FpfStorage.DeleteFloor(floor);
             FpfStorage.DeleteStyle(floor);
             FpfStorage.DeletePlacement(floor);

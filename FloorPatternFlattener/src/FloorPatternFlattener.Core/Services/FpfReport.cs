@@ -35,6 +35,8 @@ namespace FloorPatternFlattener.Services
         public List<string> Warnings { get; } = new List<string>();
         /// <summary>Floors whose full hatch is large. Informational only: nothing is truncated or blocked.</summary>
         public List<string> Heavy { get; } = new List<string>();
+        /// <summary>Per-floor live vs flattened pattern angle (or "angle unverified").</summary>
+        public List<string> PatternAngles { get; } = new List<string>();
         public List<string> Errors { get; } = new List<string>();
 
         public bool HasProblems =>
@@ -86,6 +88,7 @@ namespace FloorPatternFlattener.Services
 
             Section(sb, "Skipped - not editable (worksharing: owned by another user or out of date; reload latest / request, then Refresh)", NotEditable);
             Section(sb, "Heavy pattern (full hatch was still written, split across multiple shapes)", Heavy);
+            Section(sb, "Pattern angle (live vs flat)", PatternAngles);
             Section(sb, "No pattern on material - default 300 mm grid used", DefaultGrid);
             Section(sb, "Drafting pattern converted at 1:" + FpfOptions.DraftingPatternScale, DraftingScaled);
             Section(sb, "Warnings", Warnings);

@@ -19,6 +19,9 @@ namespace FloorPatternFlattener.Geometry
         public PatternSource Pattern { get; set; }
         public bool FromTriangulation { get; set; }
 
+        /// <summary>Plan angle (rad) of the face U-axis; used with material grid angle for live pattern orientation.</summary>
+        public double FacePlanRotationRad { get; set; }
+
         /// <summary>The face's own 3D edge loops (outer first), used by Surface mode; null if unavailable.</summary>
         public IList<CurveLoop> Loops { get; set; }
 
@@ -266,6 +269,7 @@ namespace FloorPatternFlattener.Geometry
                         if (piece.Region.IsEmpty) continue;
                         AddSurfaceBoundaryEdges(face, piece, input);
                         piece.Pattern = ResolvePattern(doc, floor, face, fallbackMaterial, patterns, input);
+                        piece.FacePlanRotationRad = PatternAngleMatcher.TryFacePlanRotationRad(face);
                         input.Pieces.Add(piece);
                     }
                     else
@@ -295,12 +299,14 @@ namespace FloorPatternFlattener.Geometry
 
                             if (pattern == null)
                                 pattern = ResolvePattern(doc, floor, face, fallbackMaterial, patterns, input);
+                            var faceRot = PatternAngleMatcher.TryFacePlanRotationRad(face);
                             var piece = new TopPiece
                             {
                                 Ox = a.X, Oy = a.Y, Oz = a.Z,
                                 Nx = nrm.X, Ny = nrm.Y, Nz = nrm.Z,
                                 Pattern = pattern,
-                                FromTriangulation = true
+                                FromTriangulation = true,
+                                FacePlanRotationRad = faceRot
                             };
                             piece.Region.AddEdge(a.X, a.Y, b.X, b.Y);
                             piece.Region.AddEdge(b.X, b.Y, c.X, c.Y);
