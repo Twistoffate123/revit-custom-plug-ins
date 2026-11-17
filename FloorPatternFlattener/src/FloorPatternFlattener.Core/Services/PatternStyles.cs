@@ -95,7 +95,7 @@ namespace FloorPatternFlattener.Services
         {
             if (floor == null) return GetTypeId(kind);
             var displayName = FpfFloorNaming.DirectShapeTypeName(floor, kind);
-            var filterTag = TypeName(kind);
+            var filterTag = FpfFloorNaming.TypeComments(kind);
             var cacheKey = floor.UniqueId + "|" + (int)kind;
             if (_typeByName.TryGetValue(cacheKey, out var cached)) return cached;
             var id = EnsureDirectShapeType(displayName, filterTag);

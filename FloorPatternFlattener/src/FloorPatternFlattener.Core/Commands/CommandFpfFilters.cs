@@ -17,11 +17,11 @@ namespace FloorPatternFlattener.Commands
     [Regeneration(RegenerationOption.Manual)]
     public class CommandFpfFilters : IExternalCommand
     {
-        private static readonly (string Name, BuiltInParameter Param, string Value)[] Definitions =
+        private static readonly (string Name, BuiltInParameter Param, string Value, bool Contains)[] Definitions =
         {
-            (FpfOptions.FilterAllName, BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS, FpfOptions.CommentsTag),
-            (FpfOptions.FilterForegroundName, BuiltInParameter.ALL_MODEL_TYPE_COMMENTS, FpfOptions.ForegroundTypeName),
-            (FpfOptions.FilterBackgroundName, BuiltInParameter.ALL_MODEL_TYPE_COMMENTS, FpfOptions.BackgroundTypeName)
+            (FpfOptions.FilterAllName, BuiltInParameter.ALL_MODEL_TYPE_COMMENTS, FpfOptions.CommentsTag, true),
+            (FpfOptions.FilterForegroundName, BuiltInParameter.ALL_MODEL_TYPE_COMMENTS, FpfOptions.ForegroundTypeName, true),
+            (FpfOptions.FilterBackgroundName, BuiltInParameter.ALL_MODEL_TYPE_COMMENTS, FpfOptions.BackgroundTypeName, true)
         };
 
         /// <summary>Old FPF filters that are no longer created but are still removed by "Remove everywhere".</summary>
@@ -38,7 +38,7 @@ namespace FloorPatternFlattener.Commands
                 {
                     MainInstruction = "Flat pattern view filters",
                     MainContent = "Creates or updates the filters \"" + string.Join("\", \"", Definitions.Select(d => d.Name)) +
-                                  "\" (Generic Models, rules on Comments / Type Comments). They are added with no overrides - " +
+                                  "\" (Generic Models, rules on Type Comments). They are added with no overrides - " +
                                   "set lines, patterns or visibility in Visibility/Graphics.\n\n\"" + FpfOptions.FilterLiveFloorName +
                                   "\" (Floors, Comments contains \"" + FpfOptions.HideLiveMark + "\") is added WITH overrides: " +
                                   "surface and cut patterns hidden on live floors flattened with \"Hide live floor pattern\".\n\n" +
@@ -121,7 +121,9 @@ namespace FloorPatternFlattener.Commands
             var ids = new List<ElementId>();
             foreach (var d in Definitions)
             {
-                var rule = ParameterFilterRuleFactory.CreateEqualsRule(new ElementId(d.Param), d.Value);
+                var rule = d.Contains
+                    ? ParameterFilterRuleFactory.CreateContainsRule(new ElementId(d.Param), d.Value)
+                    : ParameterFilterRuleFactory.CreateEqualsRule(new ElementId(d.Param), d.Value);
                 var filter = new ElementParameterFilter(rule);
                 if (existing.TryGetValue(d.Name, out var pfe))
                 {

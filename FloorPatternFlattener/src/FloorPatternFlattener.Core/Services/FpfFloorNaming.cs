@@ -6,35 +6,52 @@ namespace FloorPatternFlattener.Services
     /// <summary>Display names for flat-pattern DirectShapes and groups tied to a source floor.</summary>
     internal static class FpfFloorNaming
     {
-        /// <summary>FPF - &lt;type name&gt; - &lt;Mark&gt; (Id …) or without Mark when empty.</summary>
-        public static string BaseName(Floor floor)
+        /// <summary>What schedules and Properties should show: floor type, instance name, or Mark — nothing else.</summary>
+        public static string FloorDisplayName(Floor floor)
         {
-            if (floor == null) return "FPF - Floor";
-            var typeName = "Floor";
+            if (floor == null) return "Floor";
+            try
+            {
+                var n = floor.Name;
+                if (!string.IsNullOrWhiteSpace(n)) return n.Trim();
+            }
+            catch
+            {
+                // ignore
+            }
             try
             {
                 var ft = floor.FloorType;
-                if (ft != null && !string.IsNullOrWhiteSpace(ft.Name)) typeName = ft.Name.Trim();
+                if (ft != null && !string.IsNullOrWhiteSpace(ft.Name)) return ft.Name.Trim();
             }
             catch
             {
                 // ignore
             }
             var mark = SafeMark(floor);
-            var id = floor.Id.Value;
-            if (!string.IsNullOrWhiteSpace(mark))
-                return "FPF - " + typeName + " - " + mark + " (Id " + id + ")";
-            return "FPF - " + typeName + " (Id " + id + ")";
+            if (!string.IsNullOrWhiteSpace(mark)) return mark;
+            return "Floor";
         }
 
-        /// <summary>Filter tag plus floor label so view filters (contains) and schedules both work.</summary>
-        public static string CommentsValue(Floor floor) => FpfOptions.CommentsTag + " | " + BaseName(floor);
+        /// <summary>Instance Comments: floor label only.</summary>
+        public static string InstanceComments(Floor floor) => FloorDisplayName(floor);
 
-        public static string GroupTypeName(Floor floor) => BaseName(floor) + " pattern";
+        /// <summary>
+        /// DirectShapeType name shown in Properties (floor name). Layer kinds use invisible suffixes so types stay unique.
+        /// </summary>
+        public static string DirectShapeTypeName(Floor floor, PatternLayerKind kind)
+        {
+            var label = FloorDisplayName(floor);
+            if (kind == PatternLayerKind.Background) return label + "\u200B";
+            if (kind == PatternLayerKind.Edge) return label + "\u200B\u200B";
+            return label;
+        }
 
-        /// <summary>Type selector name: floor label plus hatch layer (shown in Properties / tags).</summary>
-        public static string DirectShapeTypeName(Floor floor, PatternLayerKind kind) =>
-            BaseName(floor) + " - " + LayerLabel(kind);
+        /// <summary>Type Comments carry the FPF filter marker and layer id (not shown as the type name).</summary>
+        public static string TypeComments(PatternLayerKind kind) =>
+            FpfOptions.CommentsTag + "|" + PatternStyles.TypeName(kind);
+
+        public static string GroupTypeName(Floor floor) => FloorDisplayName(floor);
 
         public static string LayerLabel(PatternLayerKind kind)
         {

@@ -488,15 +488,10 @@ namespace FloorPatternFlattener.Services
             }
             catch { /* ignore */ }
 
-            try
-            {
-                var baseName = FpfFloorNaming.BaseName(floor);
-                var suffix = chunkCount > 1 ? " (" + (chunkIndex + 1) + "/" + chunkCount + ")" : string.Empty;
-                ds.SetName(baseName + " - " + label + suffix);
-            }
+            try { ds.SetName(FpfFloorNaming.FloorDisplayName(floor)); }
             catch { /* ignore */ }
 
-            SetString(ds, BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS, FpfFloorNaming.CommentsValue(floor));
+            SetString(ds, BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS, FpfFloorNaming.InstanceComments(floor));
 
             // Phases: match the floor.
             try

@@ -18,7 +18,7 @@ namespace FloorPatternFlattener
         /// <summary>DirectShape.ApplicationId.</summary>
         public const string ApplicationId = "FloorPatternFlattener";
 
-        /// <summary>Written to the DirectShape "Comments" parameter so users can build a view filter.</summary>
+        /// <summary>Written to DirectShape <b>Type</b> Comments so view filters (contains) still find all flat-pattern shapes.</summary>
         public const string CommentsTag = "FPF Flat Pattern";
 
         /// <summary>
