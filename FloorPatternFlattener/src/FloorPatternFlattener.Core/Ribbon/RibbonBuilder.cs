@@ -67,6 +67,28 @@ namespace FloorPatternFlattener.Ribbon
             });
 
             panel.AddItem(new PushButtonData(
+                "FPF_CutOutPattern",
+                "Cut Out\nPattern",
+                asm,
+                "FloorPatternFlattener.Commands.CommandCutOutPattern")
+            {
+                ToolTip = "Remove flat hatch and edge lines where columns, pits, kerbs and other elements sit on the floor.",
+                LongDescription =
+                    "Pick obstructions and the flattened output (floor, group, or pattern lines), or sketch a closed loop. " +
+                    "Cut-outs are stored on the floor and re-applied on Refresh. Use Clear Cut-Outs to remove them."
+            });
+
+            panel.AddItem(new PushButtonData(
+                "FPF_ClearCutOuts",
+                "Clear\nCut-Outs",
+                asm,
+                "FloorPatternFlattener.Commands.CommandClearCutOuts")
+            {
+                ToolTip = "Remove all stored cut-outs from the selected flattened floor and rebuild its pattern.",
+                LongDescription = "Clears picked-element and sketch cut-outs for the selected flattened floor or its output group."
+            });
+
+            panel.AddItem(new PushButtonData(
                 "FPF_LiftSelected",
                 "Lift\nSelected",
                 asm,

@@ -158,7 +158,11 @@ namespace FloorPatternFlattener.Services
                 return markChanged;
             }
 
-            var signature = EffectiveSignature(input.Signature, style, placement, _currentFloorLiftMm);
+            var cutouts = FpfStorage.ReadCutouts(floor);
+            CutoutResolver.ApplyToInput(_doc, floor, cutouts, input);
+            input.EmitCutoutOutline = cutouts.EmitCutoutOutline;
+
+            var signature = EffectiveSignature(input.Signature, style, placement, _currentFloorLiftMm, cutouts);
 
             if (mode != ApplyMode.Force && wasFlattened && linksOk && link.Signature == signature)
             {
@@ -347,12 +351,14 @@ namespace FloorPatternFlattener.Services
         /// Lines keep the original signature (no rebuild of existing floors after the upgrade).
         /// </summary>
         private static string EffectiveSignature(string inputSignature, FlattenStyle style, PatternPlacement placement,
-            double floorLiftMm)
+            double floorLiftMm, FloorCutoutData cutouts = null)
         {
             var sig = inputSignature;
             // Identity adds nothing, so floors flattened before rotation existed are not rebuilt.
             if (placement != null && !placement.IsIdentity) sig += "|P" + placement.ToStorage();
             sig += "|L" + floorLiftMm.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+            if (cutouts != null && !cutouts.IsEmpty)
+                sig += "|C" + cutouts.SignatureToken();
             return sig;
         }
 
@@ -1101,7 +1107,7 @@ namespace FloorPatternFlattener.Services
             {
                 var lift = GetFloorLiftMmForDisplay(floor);
                 var sig = EffectiveSignature(FloorHatchBuilder.ReadInput(floor, patterns).Signature, FpfStorage.ReadStyle(floor),
-                    FpfStorage.ReadPlacement(floor), lift);
+                    FpfStorage.ReadPlacement(floor), lift, FpfStorage.ReadCutouts(floor));
                 return sig != link.Signature;
             }
             catch

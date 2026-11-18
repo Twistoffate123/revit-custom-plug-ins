@@ -71,6 +71,9 @@ namespace FloorPatternFlattener.Storage
 
             F("FPF_FloorLiftNumber", "C4F9D6B2-803E-4FA7-9D21-6BAE4F802C53", "Version", "Int"),
             F("FPF_FloorLiftNumber", "C4F9D6B2-803E-4FA7-9D21-6BAE4F802C53", "LiftMm", "Number"),
+
+            F("FPF_FloorCutouts", "E8A1C4D2-6F3B-4E90-8A15-2D9E7F1B3C56", "Version", "Int"),
+            F("FPF_FloorCutouts", "E8A1C4D2-6F3B-4E90-8A15-2D9E7F1B3C56", "CutoutBlob", "String"),
         };
 
         /// <summary>

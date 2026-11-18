@@ -164,6 +164,10 @@ namespace FloorPatternFlattener.Storage
         /// <summary>Unitless replacement for <see cref="FloorLiftSchemaGuid"/>.</summary>
         public static readonly Guid FloorLiftNumberSchemaGuid = new Guid("C4F9D6B2-803E-4FA7-9D21-6BAE4F802C53");
 
+        /// <summary>Per-floor hatch cut-outs (picked elements and sketch polygons).</summary>
+        public static readonly Guid FloorCutoutSchemaGuid = new Guid("E8A1C4D2-6F3B-4E90-8A15-2D9E7F1B3C56");
+        private const string FCutoutBlob = "CutoutBlob";
+
         public static Schema DirectShapeExtraSchema
         {
             get
@@ -210,6 +214,23 @@ namespace FloorPatternFlattener.Storage
                         "Floor Pattern Flattener: floor lift in millimetres, stored as a unitless number.");
                     b.AddSimpleField(FVersion, typeof(int));
                     b.AddSimpleField(FLiftMm, typeof(double)).SetSpec(SpecTypeId.Number);
+                    return b.Finish();
+                }
+            }
+        }
+
+        public static Schema FloorCutoutSchema
+        {
+            get
+            {
+                lock (Gate)
+                {
+                    var s = Schema.Lookup(FloorCutoutSchemaGuid);
+                    if (s != null) return s;
+                    var b = NewBuilder(FloorCutoutSchemaGuid, "FPF_FloorCutouts",
+                        "Floor Pattern Flattener: hatch cut-outs around obstructions (picked elements and sketches).");
+                    b.AddSimpleField(FVersion, typeof(int));
+                    b.AddSimpleField(FCutoutBlob, typeof(string));
                     return b.Finish();
                 }
             }
@@ -749,6 +770,55 @@ namespace FloorPatternFlattener.Storage
             if (floor == null) return;
             WriteMillimetreEntity(floor, FloorLiftNumberSchema, FLiftMm, mm);
             WriteMillimetreEntity(floor, FloorLiftSchema, FLiftMm, mm);
+        }
+
+        // ------------------------------------------------------------ cut-outs
+
+        public static FloorCutoutData ReadCutouts(Element floor)
+        {
+            if (floor == null) return new FloorCutoutData();
+            try
+            {
+                var schema = Schema.Lookup(FloorCutoutSchemaGuid);
+                if (schema == null) return new FloorCutoutData();
+                var entity = floor.GetEntity(schema);
+                if (entity == null || !entity.IsValid()) return new FloorCutoutData();
+                var blob = string.Empty;
+                try { blob = entity.Get<string>(FCutoutBlob) ?? string.Empty; }
+                catch { blob = string.Empty; }
+                return CutoutStorageCodec.Decode(blob);
+            }
+            catch
+            {
+                return new FloorCutoutData();
+            }
+        }
+
+        public static void WriteCutouts(Element floor, FloorCutoutData data)
+        {
+            if (floor == null) return;
+            if (data == null || data.IsEmpty)
+            {
+                DeleteCutouts(floor);
+                return;
+            }
+            var entity = new Entity(FloorCutoutSchema);
+            SetValue(entity, FVersion, FpfOptions.SchemaDataVersion);
+            SetValue(entity, FCutoutBlob, CutoutStorageCodec.Encode(data));
+            floor.SetEntity(entity);
+        }
+
+        public static void DeleteCutouts(Element floor)
+        {
+            if (floor == null) return;
+            var schema = Schema.Lookup(FloorCutoutSchemaGuid);
+            if (schema == null) return;
+            try
+            {
+                var entity = floor.GetEntity(schema);
+                if (entity != null && entity.IsValid()) floor.DeleteEntity(schema);
+            }
+            catch { /* ignore */ }
         }
 
         // ------------------------------------------------------------ direct shape

@@ -48,6 +48,12 @@ namespace FloorPatternFlattener.Geometry
         /// <summary>Plan holes (shafts, face openings, sketch inner loops) subtracted after faces are unioned.</summary>
         public List<RegionXY> Holes { get; } = new List<RegionXY>();
 
+        /// <summary>User cut-outs (columns, pits, sketch polygons) merged at build time.</summary>
+        public List<RegionXY> CutoutRegions { get; } = new List<RegionXY>();
+
+        /// <summary>When set, cut-out footprints are drawn as extra edge lines.</summary>
+        public bool EmitCutoutOutline { get; set; }
+
         /// <summary>Top-surface boundary from Revit face edge loops only (never triangle interior edges).</summary>
         public List<BoundaryEdge> BoundaryEdges { get; } = new List<BoundaryEdge>();
 
@@ -833,12 +839,21 @@ namespace FloorPatternFlattener.Geometry
                 list.Add(p);
             }
 
+            var hatchHoles = MergeHoleLists(input.Holes, input.CutoutRegions);
             foreach (var group in groups.Values)
-                BuildGroup(group, input.Holes, placement, minLen, dotLen, result);
+                BuildGroup(group, hatchHoles, placement, minLen, dotLen, result);
 
             var hatchBefore = result.Segments.Count;
             var sw = Stopwatch.StartNew();
             AppendBoundary(input, minLen, result);
+            if (input.CutoutRegions.Count > 0)
+            {
+                var cutSw = Stopwatch.StartNew();
+                var stats = CutoutSegmentClip.ClipSegmentListInPlace(result.Segments, input.CutoutRegions, minLen);
+                if (input.EmitCutoutOutline)
+                    EmitCutoutOutlineEdges(input, minLen, result);
+                CutoutResolver.LogCutoutPhase(cutSw, input.CutoutRegions.Count, stats);
+            }
             sw.Stop();
             Services.FpfRefreshLog.LogIfActive("boundary-clip", sw.ElapsedMilliseconds,
                 "hatchBefore=" + hatchBefore.ToString(CultureInfo.InvariantCulture) +
@@ -876,6 +891,40 @@ namespace FloorPatternFlattener.Geometry
             Kind = PatternLayerKind.Edge,
             Description = "floor edge"
         };
+
+        private static List<RegionXY> MergeHoleLists(IList<RegionXY> a, IList<RegionXY> b)
+        {
+            if (b == null || b.Count == 0) return a == null ? new List<RegionXY>() : new List<RegionXY>(a);
+            var merged = a == null ? new List<RegionXY>() : new List<RegionXY>(a);
+            foreach (var region in b)
+                if (region != null && !region.IsEmpty) merged.Add(region);
+            return merged;
+        }
+
+        private static void EmitCutoutOutlineEdges(FloorHatchInput input, double minLen, FloorHatchResult result)
+        {
+            var pieces = input.Pieces;
+            var runBase = 500000;
+            for (var r = 0; r < input.CutoutRegions.Count; r++)
+            {
+                var region = input.CutoutRegions[r];
+                if (region == null || region.IsEmpty) continue;
+                var e = region.RawEdges;
+                var run = runBase + r;
+                for (var i = 0; i < e.Count; i += 4)
+                {
+                    var x1 = e[i];
+                    var y1 = e[i + 1];
+                    var x2 = e[i + 2];
+                    var y2 = e[i + 3];
+                    var piece = PieceNearest(pieces, (x1 + x2) * 0.5, (y1 + y2) * 0.5);
+                    var a = LiftXY(x1, y1, piece, pieces);
+                    var bpt = LiftXY(x2, y2, piece, pieces);
+                    if (a.DistanceTo(bpt) < minLen) continue;
+                    result.Segments.Add(new Segment3 { A = a, B = bpt, Layer = EdgeLayer, EdgeRun = run });
+                }
+            }
+        }
 
         private static void BuildGroup(List<TopPiece> pieces, List<RegionXY> holes, PatternPlacement placement,
             double minLen, double dotLen, FloorHatchResult result)
