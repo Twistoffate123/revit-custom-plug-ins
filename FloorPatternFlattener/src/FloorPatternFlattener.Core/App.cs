@@ -17,10 +17,12 @@ namespace FloorPatternFlattener
     public class App : IExternalApplication
     {
         private AddInId _addInId;
+        private static UIControlledApplication _uiApp;
 
         public Result OnStartup(UIControlledApplication application)
         {
             _addInId = application.ActiveAddInId;
+            _uiApp = application;
 
             try
             {
@@ -50,11 +52,10 @@ namespace FloorPatternFlattener
                     "Updater registration failed - flat patterns will not auto-update this session:\n" + ex.Message);
             }
 
-            if (FpfOptions.CheckStaleOnOpen)
-            {
-                try { application.ControlledApplication.DocumentOpened += OnDocumentOpened; }
-                catch { /* ignore */ }
-            }
+            try { application.ControlledApplication.DocumentOpened += OnDocumentOpened; }
+            catch { /* ignore */ }
+            try { application.Idling += OnIdleBindParameters; }
+            catch { /* ignore */ }
 
             return Result.Succeeded;
         }
@@ -63,14 +64,45 @@ namespace FloorPatternFlattener
         {
             try { application.ControlledApplication.DocumentOpened -= OnDocumentOpened; }
             catch { /* ignore */ }
+            try { application.Idling -= OnIdleBindParameters; }
+            catch { /* ignore */ }
 
             if (_addInId != null) FlatPatternUpdater.Unregister(_addInId);
             return Result.Succeeded;
         }
 
+        private static void OnIdleBindParameters(object sender, Autodesk.Revit.UI.Events.IdlingEventArgs e)
+        {
+            var ui = sender as UIApplication;
+            if (ui == null) return;
+            var pending = false;
+            foreach (Document doc in ui.Application.Documents)
+            {
+                if (doc == null || doc.IsFamilyDocument || !doc.IsValidObject) continue;
+                try
+                {
+                    if (doc.IsModifiable) { pending = true; continue; }
+                    using (var t = new Transaction(doc, "FPF parameters"))
+                    {
+                        if (t.Start() != TransactionStatus.Started) { pending = true; continue; }
+                        FpfProjectParameters.EnsureBound(doc);
+                        t.Commit();
+                    }
+                }
+                catch
+                {
+                    pending = true;
+                }
+            }
+
+            if (!pending && _uiApp != null)
+            {
+                try { _uiApp.Idling -= OnIdleBindParameters; } catch { /* ignore */ }
+            }
+        }
+
         /// <summary>
-        /// Read-only: counts flattened floors whose hatch no longer matches the model (e.g. edited on a machine
-        /// without the add-in) and suggests Refresh. Never modifies the document.
+        /// Binds FPF parameters, then optionally counts flattened floors whose hatch no longer matches the model.
         /// </summary>
         private static void OnDocumentOpened(object sender, DocumentOpenedEventArgs e)
         {
@@ -78,6 +110,20 @@ namespace FloorPatternFlattener
             {
                 var doc = e.Document;
                 if (doc == null || doc.IsFamilyDocument || doc.IsLinked) return;
+                try
+                {
+                    using (var t = new Transaction(doc, "FPF parameters"))
+                    {
+                        if (t.Start() == TransactionStatus.Started)
+                        {
+                            FpfProjectParameters.EnsureBound(doc);
+                            t.Commit();
+                        }
+                    }
+                }
+                catch { /* bind is best effort */ }
+
+                if (!FpfOptions.CheckStaleOnOpen) return;
 
                 var floors = FpfStorage.GetFlattenedFloors(doc);
                 if (floors.Count == 0) return;

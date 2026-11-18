@@ -18,7 +18,8 @@ namespace FloorPatternFlattener.Services
 
         private static Definition _liftDef;
         private static Definition _extraLiftDef;
-        private static bool _bindAttempted;
+        private static readonly System.Collections.Generic.HashSet<string> BoundDocuments =
+            new System.Collections.Generic.HashSet<string>();
 
         /// <summary>Does not change Revit's shared-parameter file path (see <see cref="EnsureBound"/>).</summary>
         public static void ConfigureSharedParameterFile(ControlledApplication app)
@@ -33,14 +34,11 @@ namespace FloorPatternFlattener.Services
         public static void EnsureBound(Document doc)
         {
             if (doc == null || doc.IsFamilyDocument) return;
-            if (_bindAttempted) return;
+            var key = DocKey(doc);
+            if (BoundDocuments.Contains(key)) return;
 
             var fpfPath = FpfSharedParametersPath();
-            if (!File.Exists(fpfPath))
-            {
-                _bindAttempted = true;
-                return;
-            }
+            if (!File.Exists(fpfPath)) return;
 
             var app = doc.Application;
             var originalPath = app.SharedParametersFilename;
@@ -61,15 +59,11 @@ namespace FloorPatternFlattener.Services
                 _extraLiftDef = grp.Definitions.get_Item(ExtraLiftName);
                 if (_liftDef == null || _extraLiftDef == null) return;
 
-                var map = doc.ParameterBindings;
-                if (!map.Contains(_liftDef)) BindInstance(doc, _liftDef, BuiltInCategory.OST_GenericModel);
-                if (!map.Contains(_extraLiftDef)) BindInstance(doc, _extraLiftDef, BuiltInCategory.OST_GenericModel);
-                if (!map.Contains(_liftDef))
-                {
-                    BindInstance(doc, _liftDef, BuiltInCategory.OST_IOSModelGroups);
-                    if (!map.Contains(_extraLiftDef))
-                        BindInstance(doc, _extraLiftDef, BuiltInCategory.OST_IOSModelGroups);
-                }
+                // One binding owns every category. Inserting Generic Models first used to skip Model Groups.
+                BindInstance(doc, _liftDef,
+                    BuiltInCategory.OST_GenericModel, BuiltInCategory.OST_IOSModelGroups);
+                BindInstance(doc, _extraLiftDef, BuiltInCategory.OST_GenericModel);
+                BoundDocuments.Add(key);
             }
             catch
             {
@@ -77,7 +71,6 @@ namespace FloorPatternFlattener.Services
             }
             finally
             {
-                _bindAttempted = true;
                 if (swapped)
                 {
                     try { app.SharedParametersFilename = originalPath; }
@@ -86,19 +79,42 @@ namespace FloorPatternFlattener.Services
             }
         }
 
-        private static void BindInstance(Document doc, Definition def, BuiltInCategory cat)
+        private static string DocKey(Document doc)
+        {
+            try { return (doc.PathName ?? "") + "|" + (doc.Title ?? ""); }
+            catch { return doc.GetHashCode().ToString(); }
+        }
+
+        private static void BindInstance(Document doc, Definition def, params BuiltInCategory[] cats)
         {
             try
             {
-                var catObj = Category.GetCategory(doc, cat);
-                if (catObj == null) return;
                 var set = doc.Application.Create.NewCategorySet();
-                set.Insert(catObj);
+                var map = doc.ParameterBindings;
+                if (map.Contains(def) && map.get_Item(def) is InstanceBinding existing)
+                {
+                    foreach (Category c in existing.Categories)
+                        if (c != null) set.Insert(c);
+                }
+
+                foreach (var cat in cats)
+                {
+                    var catObj = Category.GetCategory(doc, cat);
+                    if (catObj != null) set.Insert(catObj);
+                }
+
+                if (set.Size == 0) return;
                 var binding = doc.Application.Create.NewInstanceBinding(set);
 #if REVIT_2025 || REVIT_2026 || REVIT_2027
-                doc.ParameterBindings.Insert(def, binding, GroupTypeId.Constraints);
+                if (map.Contains(def))
+                    map.ReInsert(def, binding, GroupTypeId.Constraints);
+                else
+                    map.Insert(def, binding, GroupTypeId.Constraints);
 #else
-                doc.ParameterBindings.Insert(def, binding, BuiltInParameterGroup.PG_CONSTRAINTS);
+                if (map.Contains(def))
+                    map.ReInsert(def, binding, BuiltInParameterGroup.PG_CONSTRAINTS);
+                else
+                    map.Insert(def, binding, BuiltInParameterGroup.PG_CONSTRAINTS);
 #endif
             }
             catch

@@ -91,6 +91,8 @@ namespace FloorPatternFlattener.Updater
             UpdaterRegistry.AddTrigger(id, new ElementClassFilter(typeof(Material)), Element.GetChangeTypeAny());
             UpdaterRegistry.AddTrigger(id, new ElementClassFilter(typeof(FillPatternElement)), Element.GetChangeTypeAny());
             UpdaterRegistry.AddTrigger(id, new ElementClassFilter(typeof(View)), Element.GetChangeTypeElementAddition());
+            // Pattern-group FPF Lift edits. Execute ignores every other group change (including Origin Level Offset).
+            UpdaterRegistry.AddTrigger(id, new ElementClassFilter(typeof(Group)), Element.GetChangeTypeAny());
 
             if (uiApp != null) FlatPatternUpdaterDeferred.Bind(uiApp);
         }
@@ -120,6 +122,12 @@ namespace FloorPatternFlattener.Updater
             FpfRefreshLog.LogUpdater("updater-trigger ids=" + CountIds(modified) + "/" + CountIds(added) +
                                      " deleted=" + deleted.Count.ToString(CultureInfo.InvariantCulture) +
                                      " sample=" + FirstIds(modified, added, 8));
+
+            if (TryApplyGroupLifts(doc, modified))
+            {
+                FpfRefreshLog.LogUpdater("action=group-lift-only");
+                return;
+            }
 
             if (!AutoUpdateSetting.Enabled)
             {
@@ -303,6 +311,112 @@ namespace FloorPatternFlattener.Updater
             }
 
             return true;
+        }
+
+        private static int _applyingGroupLift;
+
+        /// <summary>
+        /// Whole-floor lift edited on the model group. One MoveElement, no hatch rebuild.
+        /// Returns true when every modified element was a pattern group (so origin-offset edits stop here).
+        /// </summary>
+        private static bool TryApplyGroupLifts(Document doc, ICollection<ElementId> modified)
+        {
+            if (_applyingGroupLift > 0) return true;
+            if (modified == null || modified.Count == 0) return false;
+            var onlyPatternGroups = true;
+            var saw = false;
+            foreach (var id in modified)
+            {
+                if (!(doc.GetElement(id) is Group g) || !FpfOutputElements.IsPatternGroup(g, doc))
+                {
+                    onlyPatternGroups = false;
+                    continue;
+                }
+
+                saw = true;
+                ApplyGroupLift(doc, g);
+            }
+
+            return saw && onlyPatternGroups;
+        }
+
+        private static void ApplyGroupLift(Document doc, Group group)
+        {
+            var param = FpfProjectParameters.ReadLiftMm(group);
+            IList<ElementId> members;
+            try { members = group.GetMemberIds(); }
+            catch { return; }
+
+            DirectShape sample = null;
+            Floor floor = null;
+            if (members != null)
+            {
+                foreach (var id in members)
+                {
+                    if (!(doc.GetElement(id) is DirectShape ds) || !FpfOutputElements.IsFlattenedDirectShape(ds))
+                        continue;
+                    sample = ds;
+                    var link = FpfStorage.ReadDirectShape(ds);
+                    if (link != null && !string.IsNullOrEmpty(link.SourceFloorUniqueId))
+                        floor = doc.GetElement(link.SourceFloorUniqueId) as Floor;
+                    break;
+                }
+            }
+
+            var stored = FpfStorage.ReadFloorLiftMm(group);
+            if (!stored.HasValue)
+            {
+                var baseline = (sample != null ? FpfProjectParameters.ReadLiftMm(sample) : null)
+                               ?? (floor != null ? FpfStorage.ReadFloorLiftMm(floor) : null)
+                               ?? param ?? FpfOptions.DefaultFloorLiftMm;
+                _applyingGroupLift++;
+                try
+                {
+                    FpfStorage.WriteFloorLiftMm(group, baseline);
+                    if (!param.HasValue || Math.Abs(param.Value - baseline) > 0.05)
+                        FpfProjectParameters.WriteLiftMm(group, baseline);
+                }
+                finally { _applyingGroupLift--; }
+
+                FpfRefreshLog.LogUpdater("action=group-lift-baseline mm=" +
+                                         baseline.ToString("0.##", CultureInfo.InvariantCulture));
+                return;
+            }
+
+            if (!param.HasValue || Math.Abs(param.Value - stored.Value) < 0.05)
+            {
+                FpfRefreshLog.LogUpdater("action=group-edit-ignored liftUnchanged groupId=" + group.Id);
+                return;
+            }
+
+            var deltaMm = param.Value - stored.Value;
+            _applyingGroupLift++;
+            try
+            {
+                ElementTransformUtils.MoveElement(doc, group.Id, new XYZ(0, 0, deltaMm / 304.8));
+                FpfStorage.WriteFloorLiftMm(group, param.Value);
+                if (floor != null) FpfStorage.WriteFloorLiftMm(floor, param.Value);
+                if (members != null)
+                {
+                    foreach (var id in members)
+                    {
+                        if (doc.GetElement(id) is DirectShape ds && FpfOutputElements.IsFlattenedDirectShape(ds))
+                            FpfProjectParameters.WriteLiftMm(ds, param.Value);
+                    }
+                }
+
+                FpfRefreshLog.LogUpdater("action=group-lift-move groupId=" + group.Id +
+                                         " mm=" + param.Value.ToString("0.##", CultureInfo.InvariantCulture) +
+                                         " deltaMm=" + deltaMm.ToString("0.##", CultureInfo.InvariantCulture));
+            }
+            catch (Exception ex)
+            {
+                FpfRefreshLog.LogUpdater("action=group-lift-failed " + ex.Message);
+            }
+            finally
+            {
+                _applyingGroupLift--;
+            }
         }
 
         private static string CountIds(ICollection<ElementId> ids) =>
