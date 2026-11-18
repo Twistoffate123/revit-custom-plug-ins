@@ -119,13 +119,16 @@ namespace FloorPatternFlattener.Commands
             var style = _state.Style;
             var placement = _state.Placement.Clone();
             var hideLive = _state.HideLive;
+            var hideLiveInView = _state.HideLiveInActiveView;
             var ok = CommandSupport.RunTransaction(_doc, "Flatten Floor Patterns", _report, () =>
             {
-                var svc = new FlatPatternService(_doc, _report, canEdit);
+                View active = null;
+                try { active = _uidoc?.ActiveView; } catch { /* ignore */ }
+                var svc = new FlatPatternService(_doc, _report, canEdit, active);
                 foreach (var f in floors)
                 {
                     if (!f.IsValidObject) continue;
-                    svc.Apply(f, ApplyMode.IfChanged, true, style, placement, hideLive);
+                    svc.Apply(f, ApplyMode.IfChanged, true, style, placement, hideLive, hideLiveInView);
                     if (svc.LastFloorSegments > _maxFloorSegments)
                     {
                         _maxFloorSegments = svc.LastFloorSegments;
@@ -173,6 +176,7 @@ namespace FloorPatternFlattener.Commands
 
             LastStyleSetting.Save(_state.Style);
             LastHideLiveSetting.Save(_state.HideLive);
+            LastHideLiveInActiveViewSetting.Save(_state.HideLiveInActiveView);
             var hint = "Control the hatch with a view filter (Filter button) using Projection Lines. " +
                        "Hatch lines are written in chunks (~25k lines per DirectShape); Tab still picks individual line references inside a chunk where Revit allows. " +
                        "Each FPF Floor Edge segment is its own element so you can delete one edge without losing the rest. " +

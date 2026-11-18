@@ -52,6 +52,7 @@ namespace FloorPatternFlattener.Commands
                     Style = LastStyleSetting.Load(),
                     Placement = PatternPlacement.Identity,
                     HideLive = LastHideLiveSetting.Load(),
+                    HideLiveInActiveView = LastHideLiveInActiveViewSetting.Load(),
                     Info = floors.Count + " floor(s) selected. With angle 0 and no anchor the flat pattern matches the " +
                            "live floor pattern exactly. Already flattened floors are replaced. Use Edit to change one " +
                            "keeping its stored settings."

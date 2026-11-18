@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Autodesk.Revit.DB;
 using FloorPatternFlattener.Geometry;
+using FloorPatternFlattener;
 using FloorPatternFlattener.Storage;
 
 namespace FloorPatternFlattener.Services
@@ -31,16 +32,19 @@ namespace FloorPatternFlattener.Services
         private readonly Func<ElementId, bool> _canEdit;
         private readonly PatternReader _patterns;
         private readonly PatternStyles _styles;
+        private readonly View _activeView;
         private List<View> _views;
         private Dictionary<string, List<DirectShape>> _shapesBySource;
+        private bool _hideLiveInActiveView;
 
-        public FlatPatternService(Document doc, FpfReport report, Func<ElementId, bool> canEdit)
+        public FlatPatternService(Document doc, FpfReport report, Func<ElementId, bool> canEdit, View activeView = null)
         {
             _doc = doc ?? throw new ArgumentNullException(nameof(doc));
             _report = report ?? new FpfReport();
             _canEdit = canEdit ?? (id => Editability.CanEdit(doc, id));
             _patterns = new PatternReader(doc);
             _styles = new PatternStyles(doc);
+            _activeView = activeView;
         }
 
         public FpfReport Report => _report;
@@ -57,9 +61,11 @@ namespace FloorPatternFlattener.Services
         /// Returns true if the model was modified.
         /// </summary>
         public bool Apply(Floor floor, ApplyMode mode, bool applyViewGraphics, FlattenStyle? requestedStyle = null,
-            PatternPlacement requestedPlacement = null, bool? requestedHideLive = null)
+            PatternPlacement requestedPlacement = null, bool? requestedHideLive = null,
+            bool? hideLiveInActiveView = null)
         {
             if (floor == null || !floor.IsValidObject) return false;
+            _hideLiveInActiveView = hideLiveInActiveView ?? LastHideLiveInActiveViewSetting.Load();
             try
             {
                 return ApplyCore(floor, mode, applyViewGraphics, requestedStyle, requestedPlacement, requestedHideLive);
@@ -186,8 +192,6 @@ namespace FloorPatternFlattener.Services
             if (build.SkippedShort > 0)
                 _report.AddWarning(floor, build.SkippedShort + " degenerate fragments could not be stored");
             foreach (var n in build.Notes) _report.AddWarning(floor, n);
-            var elev = FloorHatchBuilder.ElevationDiagnostic(input, build);
-            if (!string.IsNullOrEmpty(elev)) _report.AddWarning(floor, elev);
 
             DissolvePatternGroups(existing);
 
@@ -242,7 +246,7 @@ namespace FloorPatternFlattener.Services
                 _report.Heavy.Add(FpfReport.Describe(floor) + ": " + LastFloorSegments.ToString("N0") +
                     " lines in " + shapes.Count + " DirectShape(s) (hatch chunked, edges one per line).");
 
-            TryGroupPatternShapes(floor, shapes);
+            var elevReport = VerifyElevationsAndCorrect(floor, shapes, input, out var group);
 
             // ---- floor link (written last; signature guards the updater against re-trigger loops)
             if (style != storedStyle || legacySurface) FpfStorage.WriteStyle(floor, style);
@@ -260,6 +264,9 @@ namespace FloorPatternFlattener.Services
             _report.LineFloors++;
 
             // ---- view graphics (full pass for new floors, copied floors and recreated shapes)
+            if (!string.IsNullOrEmpty(elevReport))
+                _report.ElevationAudits.Add(elevReport);
+
             if (applyViewGraphics || !wasFlattened || !linksOk)
             {
                 SyncNativePatterns(floor.Id);
@@ -453,9 +460,9 @@ namespace FloorPatternFlattener.Services
         }
 
         /// <summary>One model group per floor (all hatch chunks and edges) named with the floor label.</summary>
-        private void TryGroupPatternShapes(Floor floor, List<DirectShape> shapes)
+        private Group TryGroupPatternShapes(Floor floor, List<DirectShape> shapes)
         {
-            if (shapes == null || shapes.Count == 0) return;
+            if (shapes == null || shapes.Count == 0) return null;
             try
             {
                 var ids = new List<ElementId>(shapes.Count);
@@ -463,17 +470,56 @@ namespace FloorPatternFlattener.Services
                 {
                     if (ds != null && ds.IsValidObject) ids.Add(ds.Id);
                 }
-                if (ids.Count == 0) return;
+                if (ids.Count == 0) return null;
                 var group = _doc.Create.NewGroup(ids);
                 var typeId = group?.GroupType?.Id ?? ElementId.InvalidElementId;
                 var gt = typeId != ElementId.InvalidElementId ? _doc.GetElement(typeId) as GroupType : null;
                 if (gt != null)
                     gt.Name = FpfFloorNaming.GroupTypeName(floor);
+                if (group != null)
+                    GeneratedElevationVerifier.TryAlignGroupToFloor(_doc, group, floor);
+                return group;
             }
             catch
             {
-                // grouping is optional (worksharing, mixed categories, etc.)
+                return null;
             }
+        }
+
+        private string VerifyElevationsAndCorrect(Floor floor, List<DirectShape> shapes, FloorHatchInput input, out Group group)
+        {
+            group = null;
+            var audit = new GeneratedElevationVerifier.Report();
+            audit.PreGroup = GeneratedElevationVerifier.Measure(_doc, shapes, input, "pre-group");
+            var moved = GeneratedElevationVerifier.CorrectBelowTop(_doc, shapes, input, out _);
+            audit.ShapesMoved += moved;
+            if (moved > 0)
+                audit.PreGroup = GeneratedElevationVerifier.Measure(_doc, shapes, input, "pre-group (after move)");
+
+            group = TryGroupPatternShapes(floor, shapes);
+            audit.PostGroup = GeneratedElevationVerifier.Measure(_doc, shapes, input, "post-group");
+            if (audit.PostGroup.BelowTop > 0)
+            {
+                DissolvePatternGroups(shapes);
+                group = null;
+                var moved2 = GeneratedElevationVerifier.CorrectBelowTop(_doc, shapes, input, out _);
+                audit.ShapesMoved += moved2;
+                if (moved2 > 0)
+                    audit.PreGroup = GeneratedElevationVerifier.Measure(_doc, shapes, input, "regroup prep");
+                group = TryGroupPatternShapes(floor, shapes);
+                audit.PostGroup = GeneratedElevationVerifier.Measure(_doc, shapes, input, "post-group (corrected)");
+            }
+
+            if (group != null)
+                GeneratedElevationVerifier.TryGetGroupOriginZ(group, out _, out audit.GroupOriginZText);
+            GeneratedElevationVerifier.TryGetPlanCutZ(_activeView, _doc, out audit.ViewCutZText);
+            if (audit.PostGroup.Valid)
+            {
+                audit.FloorTopZText = GeneratedElevationVerifier.FormatFtMm(audit.PostGroup.FloorTopMinFt) + ".." +
+                                      GeneratedElevationVerifier.FormatFtMm(audit.PostGroup.FloorTopMaxFt);
+            }
+
+            return GeneratedElevationVerifier.BuildSummary(floor, audit);
         }
 
         /// <summary>One DirectShape per boundary run (straight side or tessellated arc span).</summary>
@@ -763,8 +809,23 @@ namespace FloorPatternFlattener.Services
         /// </summary>
         private void SyncNativePatterns(ElementId floorId)
         {
-            ViewGraphics.ForEachView(Views, CanEdit, _report,
-                v => ViewGraphics.SyncNativeSurfacePattern(v, floorId));
+            ViewGraphics.ForEachView(Views, CanEdit, _report, v =>
+            {
+                if (_hideLiveInActiveView && _activeView != null && v.Id == _activeView.Id) return;
+                ViewGraphics.SyncNativeSurfacePattern(v, floorId);
+            });
+            if (_hideLiveInActiveView && _activeView != null)
+            {
+                try
+                {
+                    if (CanEdit(_activeView.Id))
+                        ViewGraphics.SetNativeSurfacePatternVisible(_activeView, floorId, false);
+                }
+                catch
+                {
+                    _report.ViewFailures++;
+                }
+            }
         }
 
         private void HideShapesInSectionViews(IEnumerable<DirectShape> shapes)

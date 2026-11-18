@@ -73,7 +73,7 @@ namespace FloorPatternFlattener
         public const string DirectShapeNamePrefix = "Flat Pattern - Floor ";
 
         /// <summary>Bump when hatch generation changes so stored signatures no longer match.</summary>
-        public const int AlgorithmVersion = 12; // 12: per-edge authority segments, Z clearance, silhouette edges
+        public const int AlgorithmVersion = 13; // 13: elevation read-back, active-view live pattern hide
 
         /// <summary>Extensible storage schema version written into every entity.</summary>
         public const int SchemaDataVersion = 1;
@@ -83,6 +83,12 @@ namespace FloorPatternFlattener
 
         /// <summary>Minimum world +Z lift above the draped top Z so sloped faces still clear the live pattern in plan.</summary>
         public const double MinWorldZLifFeet = 2.5 / 304.8;
+
+        /// <summary>After read-back, curves must be at least this far above the floor top (world Z).</summary>
+        public const double VerifiedClearanceAboveTopFeet = 5.0 / 304.8;
+
+        /// <summary>Default when no per-run choice: hide live surface pattern in the active plan view after flatten.</summary>
+        public static bool HideLivePatternInActiveViewOnFlatten = true;
 
         /// <summary>A top face must have normal.Z above this to be considered upward-facing (~87 deg max slope).</summary>
         public const double MinUpwardNormalZ = 0.05;

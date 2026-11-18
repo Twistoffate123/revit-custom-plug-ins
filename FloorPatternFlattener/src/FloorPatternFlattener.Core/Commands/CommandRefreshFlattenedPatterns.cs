@@ -16,7 +16,7 @@ namespace FloorPatternFlattener.Commands
         {
             try
             {
-                if (!CommandSupport.TryGetDocument(commandData, out _, out var doc))
+                if (!CommandSupport.TryGetDocument(commandData, out var uidoc, out var doc))
                     return Result.Cancelled;
 
                 var floors = FpfStorage.GetFlattenedFloors(doc);
@@ -32,12 +32,13 @@ namespace FloorPatternFlattener.Commands
 
                 var ok = CommandSupport.RunTransaction(doc, "Refresh Flattened Patterns", report, () =>
                 {
-                    var svc = new FlatPatternService(doc, report, canEdit);
+                    var svc = new FlatPatternService(doc, report, canEdit, uidoc?.ActiveView);
+                    var hideInView = LastHideLiveInActiveViewSetting.Load();
                     foreach (var f in floors)
                     {
                         if (!f.IsValidObject) continue;
                         // Always regenerated (old Surface-style floors are rebuilt as Lines).
-                        svc.Apply(f, ApplyMode.Force, true);
+                        svc.Apply(f, ApplyMode.Force, true, hideLiveInActiveView: hideInView);
                     }
                     svc.CleanupOrphans();
                     svc.HideAllShapesInSectionViews();
