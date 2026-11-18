@@ -71,6 +71,33 @@ namespace FloorPatternFlattener.Services
         public static void LogIfActive(string phase, long elapsedMs, string detail) =>
             Current?.Phase(phase, elapsedMs, detail);
 
+        /// <summary>Always append (updater / diagnostics outside Refresh session).</summary>
+        public static void LogUpdater(string detail)
+        {
+            if (string.IsNullOrEmpty(detail)) return;
+            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "FloorPatternFlattener");
+            try { Directory.CreateDirectory(dir); } catch { /* ignore */ }
+            var path = Path.Combine(dir, "refresh-log.txt");
+            var ts = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture);
+            var line = ts + " floor=- updater " + detail;
+            lock (FileLock)
+            {
+                try
+                {
+                    using (var w = new StreamWriter(path, append: true, encoding: new UTF8Encoding(false)))
+                    {
+                        w.WriteLine(line);
+                        w.Flush();
+                    }
+                }
+                catch
+                {
+                    // ignore
+                }
+            }
+        }
+
         public void Dispose()
         {
             Line("session-end ms=" + _session.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture) +

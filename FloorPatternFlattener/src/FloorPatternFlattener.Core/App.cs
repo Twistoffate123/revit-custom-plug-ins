@@ -42,7 +42,7 @@ namespace FloorPatternFlattener
 
             try
             {
-                FlatPatternUpdater.Register(_addInId);
+                FlatPatternUpdater.Register(_addInId, application);
             }
             catch (Exception ex)
             {
