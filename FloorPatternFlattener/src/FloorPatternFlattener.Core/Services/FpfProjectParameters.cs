@@ -20,28 +20,39 @@ namespace FloorPatternFlattener.Services
         private static Definition _extraLiftDef;
         private static bool _bindAttempted;
 
+        /// <summary>Does not change Revit's shared-parameter file path (see <see cref="EnsureBound"/>).</summary>
         public static void ConfigureSharedParameterFile(ControlledApplication app)
         {
-            try
-            {
-                var path = Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? "",
-                    "FpfSharedParameters.txt");
-                if (File.Exists(path)) app.SharedParametersFilename = path;
-            }
-            catch
-            {
-                // ignore
-            }
+            // Intentionally empty: binding temporarily swaps Application.SharedParametersFilename in EnsureBound.
         }
+
+        private static string FpfSharedParametersPath() =>
+            Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? "",
+                "FpfSharedParameters.txt");
 
         public static void EnsureBound(Document doc)
         {
             if (doc == null || doc.IsFamilyDocument) return;
-            if (_bindAttempted && _liftDef != null) return;
-            _bindAttempted = true;
+            if (_bindAttempted) return;
+
+            var fpfPath = FpfSharedParametersPath();
+            if (!File.Exists(fpfPath))
+            {
+                _bindAttempted = true;
+                return;
+            }
+
+            var app = doc.Application;
+            var originalPath = app.SharedParametersFilename;
+            var swapped = false;
             try
             {
-                var app = doc.Application;
+                if (!string.Equals(originalPath ?? string.Empty, fpfPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    app.SharedParametersFilename = fpfPath;
+                    swapped = true;
+                }
+
                 var defFile = app.OpenSharedParameterFile();
                 if (defFile == null) return;
                 var grp = defFile.Groups.get_Item("FPF") ?? defFile.Groups.FirstOrDefault();
@@ -63,6 +74,15 @@ namespace FloorPatternFlattener.Services
             catch
             {
                 // parameters remain in extensible storage only
+            }
+            finally
+            {
+                _bindAttempted = true;
+                if (swapped)
+                {
+                    try { app.SharedParametersFilename = originalPath; }
+                    catch { /* ignore */ }
+                }
             }
         }
 
