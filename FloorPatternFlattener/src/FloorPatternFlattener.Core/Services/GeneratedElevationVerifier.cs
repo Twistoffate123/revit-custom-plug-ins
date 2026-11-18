@@ -208,6 +208,27 @@ namespace FloorPatternFlattener.Services
             }
         }
 
+        /// <summary>One-line elevation note from generation targets (no geometry read-back).</summary>
+        public static string BuildPlannedSummary(Floor floor, FloorHatchInput input, double floorLiftMm)
+        {
+            var name = FpfFloorNaming.FloorDisplayName(floor);
+            var patternFeet = FpfProjectParameters.MmToFeet(Math.Max(FpfOptions.DefaultFloorLiftMm, floorLiftMm));
+            if (patternFeet + 1.0e-12 < FpfOptions.PatternAboveTopFeet)
+                patternFeet = FpfOptions.PatternAboveTopFeet;
+            var edgeFeet = patternFeet + FpfOptions.EdgeLiftAboveHatchFeet;
+            var top = SampleTopZ(input, 0, 0);
+            if (!double.IsFinite(top) && input?.Pieces?.Count > 0)
+            {
+                var r = input.Pieces[0].Region;
+                if (r != null && !r.IsEmpty)
+                    top = SampleTopZ(input, (r.MinX + r.MaxX) * 0.5, (r.MinY + r.MaxY) * 0.5);
+            }
+            var topText = double.IsFinite(top) ? "; draped top ~" + FormatFtMm(top) : string.Empty;
+            return name + ": pattern world Z = top + " + (patternFeet * 304.8).ToString("0.##", CultureInfo.InvariantCulture) +
+                   " mm, edges + " + (edgeFeet * 304.8).ToString("0.##", CultureInfo.InvariantCulture) +
+                   " mm (planned, no read-back)" + topText;
+        }
+
         public static string BuildSummary(Floor floor, Report r)
         {
             var name = FpfFloorNaming.FloorDisplayName(floor);

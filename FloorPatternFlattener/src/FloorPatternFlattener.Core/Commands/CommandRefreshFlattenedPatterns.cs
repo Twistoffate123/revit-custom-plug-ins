@@ -37,8 +37,12 @@ namespace FloorPatternFlattener.Commands
                     foreach (var f in floors)
                     {
                         if (!f.IsValidObject) continue;
-                        // Always regenerated (old Surface-style floors are rebuilt as Lines).
-                        svc.Apply(f, ApplyMode.Force, true, hideLiveInActiveView: hideInView);
+                        // Rebuild geometry only; view sync once below (avoids N×all-views per floor).
+                        svc.Apply(f, ApplyMode.Force, false, hideLiveInActiveView: hideInView);
+                    }
+                    foreach (var f in floors)
+                    {
+                        if (f.IsValidObject) svc.SyncNativePatternsForFloor(f.Id);
                     }
                     svc.CleanupOrphans();
                     svc.HideAllShapesInSectionViews();

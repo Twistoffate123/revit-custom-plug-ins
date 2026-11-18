@@ -167,7 +167,7 @@ namespace FloorPatternFlattener.UI
             {
                 Width = 70, Margin = new Thickness(0, 2, 0, 2), VerticalAlignment = VerticalAlignment.Center,
                 Text = state.FloorLiftMm.ToString("0.##", CultureInfo.InvariantCulture),
-                ToolTip = "Applied to each flattened floor on Apply / Refresh (instance parameter FPF Lift (mm) on outputs). Default matches automatic clearance (5 mm)."
+                ToolTip = "Applied to each flattened floor on Apply / Refresh (instance parameter FPF Lift (mm) on outputs). Default 2 mm above draped top."
             };
             liftRow.Children.Add(_liftMm);
             root.Children.Add(liftRow);

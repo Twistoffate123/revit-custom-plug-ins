@@ -44,17 +44,14 @@ namespace FloorPatternFlattener
         /// <summary>DirectShapeType / Type Comments for the boundary shapes.</summary>
         public const string EdgeTypeName = "FPF Flat Pattern - Edge";
 
-        /// <summary>Projection line weight used the first time <see cref="EdgeSubcategoryName"/> is created (1–16).</summary>
-        public const int EdgeLineWeight = 5;
+        /// <summary>Projection line weight used the first time <see cref="EdgeSubcategoryName"/> is created (1–16 pen; ~thin edge in plan).</summary>
+        public const int EdgeLineWeight = 2;
 
         /// <summary>Pattern strokes within this distance of a boundary, and parallel to it, are cut away (2 mm).</summary>
         public const double BoundaryOverlapFeet = 2.0 / 304.8;
 
         /// <summary>Hatch is clipped this far inside the floor outline and outside opening edges (1.5 mm).</summary>
         public const double HatchInsetFeet = 1.5 / 304.8;
-
-        /// <summary>Boundary is lifted this far above the hatch lines, along the face normal (2 mm).</summary>
-        public const double EdgeLiftAboveHatchFeet = 2.0 / 304.8;
 
         /// <summary>
         /// Legacy: DirectShapeType / Type Comments of the removed "Surface" style. Only used to recognise and clean up
@@ -73,25 +70,31 @@ namespace FloorPatternFlattener
         public const string DirectShapeNamePrefix = "Flat Pattern - Floor ";
 
         /// <summary>Bump when hatch generation changes so stored signatures no longer match.</summary>
-        public const int AlgorithmVersion = 14; // 14: user floor lift + per-shape extra lift
+        public const int AlgorithmVersion = 15; // 15: world-Z 2/4 mm lifts, no read-back elevation pass
 
         /// <summary>Extensible storage schema version written into every entity.</summary>
         public const int SchemaDataVersion = 1;
 
-        /// <summary>Hatch lines are lifted this far along the face normal so they stay above the live floor top (2.5 mm).</summary>
-        public const double SurfaceOffsetFeet = 2.5 / 304.8;
+        /// <summary>Foreground/background hatch: world +Z above draped top (2 mm).</summary>
+        public const double PatternAboveTopFeet = 2.0 / 304.8;
 
-        /// <summary>Minimum world +Z lift above the draped top Z so sloped faces still clear the live pattern in plan.</summary>
-        public const double MinWorldZLifFeet = 2.5 / 304.8;
+        /// <summary>Edges are this far above pattern lines (2 mm → 4 mm above draped top when pattern uses <see cref="PatternAboveTopFeet"/>).</summary>
+        public const double EdgeLiftAboveHatchFeet = 2.0 / 304.8;
 
-        /// <summary>After read-back, curves must be at least this far above the floor top (world Z).</summary>
-        public const double VerifiedClearanceAboveTopFeet = 5.0 / 304.8;
+        /// <summary>Legacy signature fragment (equals <see cref="PatternAboveTopFeet"/>).</summary>
+        public const double SurfaceOffsetFeet = PatternAboveTopFeet;
+
+        /// <summary>Legacy; read-back elevation pass removed.</summary>
+        public const double MinWorldZLifFeet = 0;
+
+        /// <summary>Legacy; read-back elevation pass removed.</summary>
+        public const double VerifiedClearanceAboveTopFeet = PatternAboveTopFeet;
 
         /// <summary>Default when no per-run choice: hide live surface pattern in the active plan view after flatten.</summary>
         public static bool HideLivePatternInActiveViewOnFlatten = true;
 
-        /// <summary>Default floor lift (mm) when flattening / Refresh (matches verified clearance).</summary>
-        public const double DefaultFloorLiftMm = 5.0;
+        /// <summary>Default FPF Lift (mm) when flattening / Refresh (matches <see cref="PatternAboveTopFeet"/>).</summary>
+        public const double DefaultFloorLiftMm = 2.0;
 
         /// <summary>A top face must have normal.Z above this to be considered upward-facing (~87 deg max slope).</summary>
         public const double MinUpwardNormalZ = 0.05;

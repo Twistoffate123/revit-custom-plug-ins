@@ -253,7 +253,7 @@ namespace FloorPatternFlattener.Services
                 _report.Heavy.Add(FpfReport.Describe(floor) + ": " + LastFloorSegments.ToString("N0") +
                     " lines in " + shapes.Count + " DirectShape(s) (hatch chunked, edges one per line).");
 
-            var elevReport = VerifyElevationsAndCorrect(floor, shapes, input, out var group, _currentFloorLiftMm);
+            var elevReport = GroupShapesAndPlannedElevationNote(floor, shapes, input, out var group, _currentFloorLiftMm);
             MirrorLiftParameters(floor, shapes, group, _currentFloorLiftMm);
             try { FpfStorage.WriteFloorLiftMm(floor, _currentFloorLiftMm); }
             catch { /* ignore */ }
@@ -306,8 +306,7 @@ namespace FloorPatternFlattener.Services
         private static double AdditionalLiftFeet(double floorLiftMm)
         {
             var target = FpfProjectParameters.MmToFeet(Math.Max(0, floorLiftMm));
-            var base_ = FpfOptions.VerifiedClearanceAboveTopFeet;
-            return Math.Max(0, target - base_);
+            return Math.Max(0, target - FpfOptions.PatternAboveTopFeet);
         }
 
         private static double ResolveFloorLiftMm(Floor floor, IList<DirectShape> existing, double? requested)
@@ -566,42 +565,15 @@ namespace FloorPatternFlattener.Services
             }
         }
 
-        private string VerifyElevationsAndCorrect(Floor floor, List<DirectShape> shapes, FloorHatchInput input, out Group group,
-            double floorLiftMm)
+        private string GroupShapesAndPlannedElevationNote(Floor floor, List<DirectShape> shapes, FloorHatchInput input,
+            out Group group, double floorLiftMm)
         {
-            group = null;
-            var audit = new GeneratedElevationVerifier.Report();
-            audit.PreGroup = GeneratedElevationVerifier.Measure(_doc, shapes, input, "pre-group", floorLiftMm);
-            var moved = GeneratedElevationVerifier.CorrectBelowTop(_doc, shapes, input, out _, floorLiftMm);
-            audit.ShapesMoved += moved;
-            if (moved > 0)
-                audit.PreGroup = GeneratedElevationVerifier.Measure(_doc, shapes, input, "pre-group (after move)", floorLiftMm);
-
             group = TryGroupPatternShapes(floor, shapes);
-            audit.PostGroup = GeneratedElevationVerifier.Measure(_doc, shapes, input, "post-group", floorLiftMm);
-            if (audit.PostGroup.BelowTop > 0)
-            {
-                DissolvePatternGroups(shapes);
-                group = null;
-                var moved2 = GeneratedElevationVerifier.CorrectBelowTop(_doc, shapes, input, out _, floorLiftMm);
-                audit.ShapesMoved += moved2;
-                if (moved2 > 0)
-                    audit.PreGroup = GeneratedElevationVerifier.Measure(_doc, shapes, input, "regroup prep", floorLiftMm);
-                group = TryGroupPatternShapes(floor, shapes);
-                audit.PostGroup = GeneratedElevationVerifier.Measure(_doc, shapes, input, "post-group (corrected)", floorLiftMm);
-            }
-
-            if (group != null)
-                GeneratedElevationVerifier.TryGetGroupOriginZ(group, out _, out audit.GroupOriginZText);
-            GeneratedElevationVerifier.TryGetPlanCutZ(_activeView, _doc, out audit.ViewCutZText);
-            if (audit.PostGroup.Valid)
-            {
-                audit.FloorTopZText = GeneratedElevationVerifier.FormatFtMm(audit.PostGroup.FloorTopMinFt) + ".." +
-                                      GeneratedElevationVerifier.FormatFtMm(audit.PostGroup.FloorTopMaxFt);
-            }
-
-            return GeneratedElevationVerifier.BuildSummary(floor, audit);
+            return GeneratedElevationVerifier.BuildPlannedSummary(floor, input, floorLiftMm);
         }
+
+        /// <summary>Per-view live-pattern sync for one floor (call once per floor after bulk rebuild).</summary>
+        internal void SyncNativePatternsForFloor(ElementId floorId) => SyncNativePatterns(floorId);
 
         /// <summary>One DirectShape per boundary run (straight side or tessellated arc span).</summary>
         private static List<List<Segment3>> GroupEdgeRuns(List<Segment3> edges)

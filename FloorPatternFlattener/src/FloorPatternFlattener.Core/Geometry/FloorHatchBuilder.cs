@@ -1019,30 +1019,21 @@ namespace FloorPatternFlattener.Geometry
             Flush(result, layer, poly, minLen, null);
         }
 
-        /// <summary>Lifts hatch lines above the live top so foreground and background both clear the surface pattern (+Z min clearance).</summary>
+        /// <summary>Pattern lines: fixed world +Z above draped top.</summary>
         private static XYZ LiftHatch(double t, TopPiece piece, PatternLayer layer, double px, double py, double dx, double dy,
             List<TopPiece> pieces)
         {
             var x = px + dx * t;
             var y = py + dy * t;
             piece = HighestPieceAt(pieces, x, y) ?? piece;
-            return LiftAboveSurface(x, y, piece, FpfOptions.SurfaceOffsetFeet);
+            return LiftAboveSurfaceWorldZ(x, y, piece, FpfOptions.PatternAboveTopFeet + _floorLiftFeet);
         }
 
-        /// <summary>Offset along face normal with a minimum world +Z so hatch and edges clear the live surface on slopes.</summary>
-        private static XYZ LiftAboveSurface(double x, double y, TopPiece piece, double offsetFeet)
+        /// <summary>World +Z clearance above the draped top at (x,y).</summary>
+        private static XYZ LiftAboveSurfaceWorldZ(double x, double y, TopPiece piece, double clearanceAboveTopFeet)
         {
-            if (piece == null) return new XYZ(x, y, offsetFeet);
-            var z = piece.ZAt(x, y);
-            var totalOffset = offsetFeet + _floorLiftFeet;
-            var ox = piece.Nx * totalOffset;
-            var oy = piece.Ny * totalOffset;
-            var oz = piece.Nz * totalOffset;
-            var minWorldZ = z + FpfOptions.MinWorldZLifFeet + _floorLiftFeet;
-            var zOut = z + oz;
-            if (zOut + 1.0e-9 < minWorldZ)
-                oz = minWorldZ - z;
-            return new XYZ(x + ox, y + oy, z + oz);
+            if (piece == null) return new XYZ(x, y, clearanceAboveTopFeet);
+            return new XYZ(x, y, piece.ZAt(x, y) + clearanceAboveTopFeet);
         }
 
         private static TopPiece HighestPieceAt(List<TopPiece> pieces, double x, double y)
@@ -1486,8 +1477,8 @@ namespace FloorPatternFlattener.Geometry
         private static XYZ LiftXY(double x, double y, TopPiece piece, List<TopPiece> pieces)
         {
             piece = HighestPieceAt(pieces, x, y) ?? piece;
-            var o = FpfOptions.SurfaceOffsetFeet + FpfOptions.EdgeLiftAboveHatchFeet;
-            return LiftAboveSurface(x, y, piece, o);
+            var clearance = FpfOptions.PatternAboveTopFeet + FpfOptions.EdgeLiftAboveHatchFeet + _floorLiftFeet;
+            return LiftAboveSurfaceWorldZ(x, y, piece, clearance);
         }
 
         /// <summary>
