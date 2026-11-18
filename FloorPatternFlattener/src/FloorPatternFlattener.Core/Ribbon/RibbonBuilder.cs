@@ -72,10 +72,12 @@ namespace FloorPatternFlattener.Ribbon
                 asm,
                 "FloorPatternFlattener.Commands.CommandLiftSelected")
             {
-                ToolTip = "Move selected flat pattern Generic Models (DirectShapes) in world Z. " +
-                          "Tab-select inside the floor model group if needed.",
+                ToolTip = "Lift flat pattern DirectShapes in world Z: pre-select, drag a window/crossing box over lines " +
+                          "inside the floor group, or select the whole group to lift all lines.",
                 LongDescription = "Enter a lift in millimetres (positive up, negative down). " +
-                                  "Stored as FPF Extra Lift (mm) on each element and kept on Refresh."
+                                  "With nothing selected, drag a rectangle over pattern lines inside the model group. " +
+                                  "Selecting only the group offers to lift every flattened DirectShape in it. " +
+                                  "Stored as FPF Extra Lift (mm) and kept on Refresh."
             });
 
             panel.AddItem(new PushButtonData(
