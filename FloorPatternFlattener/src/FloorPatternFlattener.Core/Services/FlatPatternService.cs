@@ -35,7 +35,6 @@ namespace FloorPatternFlattener.Services
         private readonly View _activeView;
         private List<View> _views;
         private Dictionary<string, List<DirectShape>> _shapesBySource;
-        private bool _hideLiveInActiveView;
         private Dictionary<int, double> _extraLiftByChunk = new Dictionary<int, double>();
         private double _currentFloorLiftMm;
 
@@ -64,11 +63,10 @@ namespace FloorPatternFlattener.Services
         /// </summary>
         public bool Apply(Floor floor, ApplyMode mode, bool applyViewGraphics, FlattenStyle? requestedStyle = null,
             PatternPlacement requestedPlacement = null, bool? requestedHideLive = null,
-            bool? hideLiveInActiveView = null, double? requestedFloorLiftMm = null)
+            double? requestedFloorLiftMm = null)
         {
             if (floor == null || !floor.IsValidObject) return false;
             FpfProjectParameters.EnsureBound(_doc);
-            _hideLiveInActiveView = hideLiveInActiveView ?? LastHideLiveInActiveViewSetting.Load();
             try
             {
                 return ApplyCore(floor, mode, applyViewGraphics, requestedStyle, requestedPlacement, requestedHideLive,
@@ -580,8 +578,21 @@ namespace FloorPatternFlattener.Services
             return GeneratedElevationVerifier.BuildPlannedSummary(floor, input, floorLiftMm);
         }
 
-        /// <summary>Per-view live-pattern sync for one floor (call once per floor after bulk rebuild).</summary>
-        internal void SyncNativePatternsForFloor(ElementId floorId) => SyncNativePatterns(floorId);
+        /// <summary>
+        /// Clears legacy add-in "pattern hidden" overrides on the active view only (cheap; used by Refresh).
+        /// </summary>
+        internal void SyncNativePatternInActiveViewOnly(ElementId floorId)
+        {
+            if (_activeView == null || !CanEdit(_activeView.Id)) return;
+            try
+            {
+                ViewGraphics.SyncNativeSurfacePattern(_activeView, floorId);
+            }
+            catch
+            {
+                _report.ViewFailures++;
+            }
+        }
 
         /// <summary>One DirectShape per boundary run (straight side or tessellated arc span).</summary>
         private static List<List<Segment3>> GroupEdgeRuns(List<Segment3> edges)
@@ -874,22 +885,7 @@ namespace FloorPatternFlattener.Services
         private void SyncNativePatterns(ElementId floorId)
         {
             ViewGraphics.ForEachView(Views, CanEdit, _report, v =>
-            {
-                if (_hideLiveInActiveView && _activeView != null && v.Id == _activeView.Id) return;
-                ViewGraphics.SyncNativeSurfacePattern(v, floorId);
-            });
-            if (_hideLiveInActiveView && _activeView != null)
-            {
-                try
-                {
-                    if (CanEdit(_activeView.Id))
-                        ViewGraphics.SetNativeSurfacePatternVisible(_activeView, floorId, false);
-                }
-                catch
-                {
-                    _report.ViewFailures++;
-                }
-            }
+                ViewGraphics.SyncNativeSurfacePattern(v, floorId));
         }
 
         private void HideShapesInSectionViews(IEnumerable<DirectShape> shapes)

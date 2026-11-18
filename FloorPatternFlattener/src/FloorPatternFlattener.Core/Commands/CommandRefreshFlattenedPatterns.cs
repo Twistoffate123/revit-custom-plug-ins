@@ -31,17 +31,13 @@ namespace FloorPatternFlattener.Commands
                 var report = new FpfReport();
 
                 var svc = new FlatPatternService(doc, report, canEdit, uidoc?.ActiveView);
-                var hideInView = LastHideLiveInActiveViewSetting.Load();
                 var ok = CommandSupport.RunRefreshFloorsTransactionGroup(doc, "Refresh Flattened Patterns", report, floors,
-                    f =>
-                    {
-                        svc.Apply(f, ApplyMode.Force, false, hideLiveInActiveView: hideInView);
-                    },
+                    f => { svc.Apply(f, ApplyMode.Force, false); },
                     () =>
                     {
                         foreach (var f in floors)
                         {
-                            if (f.IsValidObject) svc.SyncNativePatternsForFloor(f.Id);
+                            if (f.IsValidObject) svc.SyncNativePatternInActiveViewOnly(f.Id);
                         }
                         svc.CleanupOrphans();
                         svc.HideAllShapesInSectionViews();

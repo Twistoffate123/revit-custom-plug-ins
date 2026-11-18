@@ -93,8 +93,8 @@ namespace FloorPatternFlattener
         /// <summary>Legacy; read-back elevation pass removed.</summary>
         public const double VerifiedClearanceAboveTopFeet = PatternAboveTopFeet;
 
-        /// <summary>Default when no per-run choice: hide live surface pattern in the active plan view after flatten.</summary>
-        public static bool HideLivePatternInActiveViewOnFlatten = true;
+        /// <summary>Live surface patterns stay visible in plan (no per-view hide overrides).</summary>
+        public static bool HideLivePatternInActiveViewOnFlatten = false;
 
         /// <summary>Default FPF Lift (mm) when flattening / Refresh (matches <see cref="PatternAboveTopFeet"/>).</summary>
         public const double DefaultFloorLiftMm = 2.0;

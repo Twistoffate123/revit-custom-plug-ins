@@ -119,7 +119,6 @@ namespace FloorPatternFlattener.Commands
             var style = _state.Style;
             var placement = _state.Placement.Clone();
             var hideLive = _state.HideLive;
-            var hideLiveInView = _state.HideLiveInActiveView;
             var floorLiftMm = _state.FloorLiftMm;
             var ok = CommandSupport.RunTransaction(_doc, "Flatten Floor Patterns", _report, () =>
             {
@@ -129,7 +128,7 @@ namespace FloorPatternFlattener.Commands
                 foreach (var f in floors)
                 {
                     if (!f.IsValidObject) continue;
-                    svc.Apply(f, ApplyMode.IfChanged, true, style, placement, hideLive, hideLiveInView, floorLiftMm);
+                    svc.Apply(f, ApplyMode.IfChanged, true, style, placement, hideLive, floorLiftMm);
                     if (svc.LastFloorSegments > _maxFloorSegments)
                     {
                         _maxFloorSegments = svc.LastFloorSegments;
@@ -177,7 +176,6 @@ namespace FloorPatternFlattener.Commands
 
             LastStyleSetting.Save(_state.Style);
             LastHideLiveSetting.Save(_state.HideLive);
-            LastHideLiveInActiveViewSetting.Save(_state.HideLiveInActiveView);
             LastFloorLiftSetting.Save(_state.FloorLiftMm);
             var hint = "Control the hatch with a view filter (Filter button) using Projection Lines. " +
                        "Hatch lines are written in chunks (~25k lines per DirectShape); Tab still picks individual line references inside a chunk where Revit allows. " +

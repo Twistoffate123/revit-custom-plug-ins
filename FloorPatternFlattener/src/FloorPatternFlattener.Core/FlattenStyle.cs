@@ -87,35 +87,6 @@ namespace FloorPatternFlattener
         }
     }
 
-    /// <summary>Remembers hide-live-in-active-view (per-view surface pattern override on the floor).</summary>
-    internal static class LastHideLiveInActiveViewSetting
-    {
-        private static string FilePath => Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "FloorPatternFlattener", "hide-live-active-view.txt");
-
-        public static bool Load()
-        {
-            try
-            {
-                if (!File.Exists(FilePath)) return FpfOptions.HideLivePatternInActiveViewOnFlatten;
-                return !string.Equals(File.ReadAllText(FilePath).Trim(), "off", StringComparison.OrdinalIgnoreCase);
-            }
-            catch
-            {
-                return FpfOptions.HideLivePatternInActiveViewOnFlatten;
-            }
-        }
-
-        public static void Save(bool on)
-        {
-            try
-            {
-                Directory.CreateDirectory(Path.GetDirectoryName(FilePath));
-                File.WriteAllText(FilePath, on ? "on" : "off");
-            }
-            catch { /* not critical */ }
-        }
-    }
 
     /// <summary>Remembers the last "Hide live floor pattern and fold lines" choice for new Flatten runs.</summary>
     internal static class LastHideLiveSetting
