@@ -73,13 +73,16 @@ namespace FloorPatternFlattener
         public const string DirectShapeNamePrefix = "Flat Pattern - Floor ";
 
         /// <summary>Bump when hatch generation changes so stored signatures no longer match.</summary>
-        public const int AlgorithmVersion = 11; // 11: edge loops authority; hatch Z lift; floor DS types
+        public const int AlgorithmVersion = 12; // 12: per-edge authority segments, Z clearance, silhouette edges
 
         /// <summary>Extensible storage schema version written into every entity.</summary>
         public const int SchemaDataVersion = 1;
 
         /// <summary>Hatch lines are lifted this far along the face normal so they stay above the live floor top (2.5 mm).</summary>
         public const double SurfaceOffsetFeet = 2.5 / 304.8;
+
+        /// <summary>Minimum world +Z lift above the draped top Z so sloped faces still clear the live pattern in plan.</summary>
+        public const double MinWorldZLifFeet = 2.5 / 304.8;
 
         /// <summary>A top face must have normal.Z above this to be considered upward-facing (~87 deg max slope).</summary>
         public const double MinUpwardNormalZ = 0.05;

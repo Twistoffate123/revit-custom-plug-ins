@@ -83,9 +83,15 @@ namespace FloorPatternFlattener.Geometry
         public TopPiece Piece;
     }
 
+    internal struct BoundarySeg
+    {
+        public double X1, Y1, X2, Y2;
+    }
+
+    /// <summary>One face EdgeLoop: ordered Revit-edge segments (no chord across non-adjacent tessellation points).</summary>
     internal sealed class AuthorityBoundaryLoop
     {
-        public List<Pt2> Points { get; } = new List<Pt2>();
+        public List<BoundarySeg> Segments { get; } = new List<BoundarySeg>();
         public TopPiece Piece;
     }
 
@@ -508,83 +514,81 @@ namespace FloorPatternFlattener.Geometry
         private static void AddSurfaceBoundaryEdges(Face face, TopPiece piece, FloorHatchInput input)
         {
             if (face?.EdgeLoops == null || piece == null) return;
-            var weld = FpfOptions.MeshCrackBridgeFeet;
             foreach (EdgeArray edgeLoop in face.EdgeLoops)
             {
-                var poly = new List<Pt2>();
+                var auth = new AuthorityBoundaryLoop { Piece = piece };
                 foreach (Edge edge in edgeLoop)
                 {
                     var pts = edge.Tessellate();
                     if (pts == null) continue;
                     AppendBoundaryLoopEdges(pts, piece, input);
-                    for (var i = 0; i < pts.Count; i++)
-                        AddAuthorityLoopPoint(poly, pts[i].X, pts[i].Y, weld);
+                    AppendAuthoritySegmentsFromTessellation(pts, auth.Segments);
                 }
-                if (poly.Count >= 3)
-                    TryRegisterAuthorityLoop(input, poly, piece);
+                if (auth.Segments.Count > 0)
+                    TryRegisterAuthorityLoop(input, auth);
             }
         }
 
-        private static void AddAuthorityLoopPoint(List<Pt2> poly, double x, double y, double weld)
+        /// <summary>Collinear merge within one Revit edge; never joins across edges in the loop.</summary>
+        private static void AppendAuthoritySegmentsFromTessellation(IList<XYZ> pts, List<BoundarySeg> dest)
         {
-            if (poly.Count > 0)
+            if (pts == null || pts.Count < 2 || dest == null) return;
+            var col = 0.5 / 304.8;
+            var runStart = 0;
+            for (var i = 1; i < pts.Count; i++)
             {
-                var last = poly[poly.Count - 1];
-                if (Math.Abs(last.X - x) <= weld && Math.Abs(last.Y - y) <= weld) return;
+                var isEnd = i + 1 >= pts.Count;
+                if (!isEnd && CollinearXY(pts[runStart], pts[i], pts[i + 1], col)) continue;
+                var x1 = pts[runStart].X;
+                var y1 = pts[runStart].Y;
+                var x2 = pts[i].X;
+                var y2 = pts[i].Y;
+                if (Math.Abs(x1 - x2) < 1.0e-12 && Math.Abs(y1 - y2) < 1.0e-12)
+                {
+                    runStart = i;
+                    continue;
+                }
+                dest.Add(new BoundarySeg { X1 = x1, Y1 = y1, X2 = x2, Y2 = y2 });
+                runStart = i;
             }
-            poly.Add(new Pt2 { X = x, Y = y });
         }
 
-        private static void TryRegisterAuthorityLoop(FloorHatchInput input, List<Pt2> poly, TopPiece piece)
+        private static void TryRegisterAuthorityLoop(FloorHatchInput input, AuthorityBoundaryLoop auth)
         {
-            if (poly.Count < 3) return;
+            if (auth?.Segments == null || auth.Segments.Count == 0) return;
             var weld = FpfOptions.MeshCrackBridgeFeet;
-            if (poly.Count == 3)
-            {
-                var area = Math.Abs((poly[1].X - poly[0].X) * (poly[2].Y - poly[0].Y) -
-                                    (poly[2].X - poly[0].X) * (poly[1].Y - poly[0].Y)) * 0.5;
-                if (area < 1.0) return;
-            }
-            if (poly.Count >= 3 &&
-                Math.Abs(poly[0].X - poly[poly.Count - 1].X) <= weld &&
-                Math.Abs(poly[0].Y - poly[poly.Count - 1].Y) <= weld)
-                poly.RemoveAt(poly.Count - 1);
-            var sig = AuthorityLoopSignature(poly, weld);
+            var sig = AuthorityLoopSignature(auth.Segments, weld);
             foreach (var existing in input.AuthorityBoundaryLoops)
             {
                 if (existing == null) continue;
-                if (AuthorityLoopSignature(existing.Points, weld) == sig) return;
+                if (AuthorityLoopSignature(existing.Segments, weld) == sig) return;
             }
-            var loop = new AuthorityBoundaryLoop { Piece = piece };
-            loop.Points.AddRange(poly);
-            input.AuthorityBoundaryLoops.Add(loop);
+            input.AuthorityBoundaryLoops.Add(auth);
         }
 
-        private static string AuthorityLoopSignature(List<Pt2> poly, double weld)
+        private static string AuthorityLoopSignature(List<BoundarySeg> segments, double weld)
         {
-            var n = poly.Count;
-            if (n == 0) return string.Empty;
+            if (segments == null || segments.Count == 0) return string.Empty;
+            var n = segments.Count;
             var best = string.Empty;
             for (var start = 0; start < n; start++)
             {
-                var sb = new StringBuilder(n * 12);
+                var sb = new StringBuilder(n * 24);
                 for (var i = 0; i < n; i++)
                 {
-                    var p = poly[(start + i) % n];
-                    sb.Append((long)Math.Round(p.X / weld)).Append(',')
-                        .Append((long)Math.Round(p.Y / weld)).Append(';');
+                    var s = segments[(start + i) % n];
+                    sb.Append(SegKey(s, weld)).Append(';');
                 }
-                var s = sb.ToString();
-                var rev = new StringBuilder(n * 12);
+                var fwd = sb.ToString();
+                sb.Clear();
                 for (var i = n - 1; i >= 0; i--)
                 {
-                    var p = poly[(start + i) % n];
-                    rev.Append((long)Math.Round(p.X / weld)).Append(',')
-                        .Append((long)Math.Round(p.Y / weld)).Append(';');
+                    var s = segments[(start + i) % n];
+                    sb.Append(SegKeyReversed(s, weld)).Append(';');
                 }
-                var sr = rev.ToString();
-                if (best.Length == 0 || string.CompareOrdinal(s, best) < 0) best = s;
-                if (string.CompareOrdinal(sr, best) < 0) best = sr;
+                var rev = sb.ToString();
+                if (best.Length == 0 || string.CompareOrdinal(fwd, best) < 0) best = fwd;
+                if (string.CompareOrdinal(rev, best) < 0) best = rev;
             }
             return best;
         }
@@ -1018,15 +1022,21 @@ namespace FloorPatternFlattener.Geometry
             var x = px + dx * t;
             var y = py + dy * t;
             piece = HighestPieceAt(pieces, x, y) ?? piece;
+            return LiftAboveSurface(x, y, piece, FpfOptions.SurfaceOffsetFeet);
+        }
+
+        /// <summary>Offset along face normal with a minimum world +Z so hatch and edges clear the live surface on slopes.</summary>
+        private static XYZ LiftAboveSurface(double x, double y, TopPiece piece, double offsetFeet)
+        {
+            if (piece == null) return new XYZ(x, y, offsetFeet);
             var z = piece.ZAt(x, y);
-            var o = FpfOptions.SurfaceOffsetFeet;
-            var ox = piece.Nx * o;
-            var oy = piece.Ny * o;
-            var oz = piece.Nz * o;
-            var minLift = z + o;
+            var ox = piece.Nx * offsetFeet;
+            var oy = piece.Ny * offsetFeet;
+            var oz = piece.Nz * offsetFeet;
+            var minWorldZ = z + FpfOptions.MinWorldZLifFeet;
             var zOut = z + oz;
-            if (zOut + 1.0e-9 < minLift)
-                oz += minLift - zOut;
+            if (zOut + 1.0e-9 < minWorldZ)
+                oz = minWorldZ - z;
             return new XYZ(x + ox, y + oy, z + oz);
         }
 
@@ -1468,12 +1478,11 @@ namespace FloorPatternFlattener.Geometry
             return -1;
         }
 
-        private static XYZ LiftXY(double x, double y, TopPiece piece)
+        private static XYZ LiftXY(double x, double y, TopPiece piece, List<TopPiece> pieces)
         {
-            var z = piece.ZAt(x, y);
-            // Hatch sits at SurfaceOffsetFeet. The edge is a further 2 mm along the normal so it draws on top.
+            piece = HighestPieceAt(pieces, x, y) ?? piece;
             var o = FpfOptions.SurfaceOffsetFeet + FpfOptions.EdgeLiftAboveHatchFeet;
-            return new XYZ(x + piece.Nx * o, y + piece.Ny * o, z + piece.Nz * o);
+            return LiftAboveSurface(x, y, piece, o);
         }
 
         /// <summary>
@@ -1539,37 +1548,120 @@ namespace FloorPatternFlattener.Geometry
             return Math.Sqrt(dx * dx + dy * dy);
         }
 
-        /// <summary>Closed loops from top-face EdgeLoops only (consecutive vertices; collinear merge on same loop).</summary>
+        /// <summary>Only Revit edge-loop segments with silhouette count 1 (drops shared triangulation/internal edges).</summary>
         private static void EmitAuthorityEdgeLoops(FloorHatchInput input, double minLen, List<Segment3> target)
         {
             var pieces = input.Pieces;
+            var weld = FpfOptions.MeshCrackBridgeFeet;
+            var counts = new Dictionary<string, int>();
+            foreach (var auth in input.AuthorityBoundaryLoops)
+            {
+                if (auth?.Segments == null) continue;
+                foreach (var s in auth.Segments)
+                {
+                    var k = SilhouetteKey(s, weld);
+                    counts.TryGetValue(k, out var n);
+                    counts[k] = n + 1;
+                }
+            }
+
             var cornerRad = 2.0 * Math.PI / 180.0;
             var runId = 0;
             foreach (var auth in input.AuthorityBoundaryLoops)
             {
-                if (auth?.Points == null || auth.Points.Count < 2) continue;
-                var loop = MergeConsecutiveCollinearInLoop(auth.Points, true);
-                if (loop.Count < 2) continue;
-                var n = loop.Count;
-                var sideRun = ++runId;
+                if (auth?.Segments == null || auth.Segments.Count == 0) continue;
+                var n = auth.Segments.Count;
+                runId++;
+                var sideRun = runId;
                 var defPiece = auth.Piece;
                 for (var i = 0; i < n; i++)
                 {
-                    var prev = loop[(i + n - 1) % n];
-                    var cur = loop[i];
-                    var next = loop[(i + 1) % n];
-                    if (i > 0 && TurnAngle(prev, cur, next) >= cornerRad)
+                    var s = auth.Segments[i];
+                    if (!counts.TryGetValue(SilhouetteKey(s, weld), out var c) || c != 1) continue;
+                    if (i > 0 && TurnAngleFromLoop(auth, i) >= cornerRad)
                         sideRun = ++runId;
-                    var aPt = loop[i];
-                    var bPt = loop[(i + 1) % n];
-                    var pieceA = PieceNearest(pieces, aPt.X, aPt.Y) ?? defPiece;
-                    var pieceB = PieceNearest(pieces, bPt.X, bPt.Y) ?? defPiece;
-                    var a = pieceA == null ? new XYZ(aPt.X, aPt.Y, 0) : LiftXY(aPt.X, aPt.Y, pieceA);
-                    var b = pieceB == null ? new XYZ(bPt.X, bPt.Y, 0) : LiftXY(bPt.X, bPt.Y, pieceB);
+                    var pieceA = PieceNearest(pieces, s.X1, s.Y1) ?? defPiece;
+                    var pieceB = PieceNearest(pieces, s.X2, s.Y2) ?? defPiece;
+                    var a = LiftXY(s.X1, s.Y1, pieceA, pieces);
+                    var b = LiftXY(s.X2, s.Y2, pieceB, pieces);
                     if (a.DistanceTo(b) < minLen) continue;
                     target.Add(new Segment3 { A = a, B = b, Layer = EdgeLayer, EdgeRun = sideRun });
                 }
             }
+        }
+
+        private static string SilhouetteKey(BoundarySeg s, double weld)
+        {
+            var a = SegKey(s, weld);
+            var b = SegKeyReversed(s, weld);
+            return string.CompareOrdinal(a, b) <= 0 ? a : b;
+        }
+
+        private static string SegKey(BoundarySeg s, double weld)
+        {
+            return (long)Math.Round(s.X1 / weld) + "," + (long)Math.Round(s.Y1 / weld) + ">" +
+                   (long)Math.Round(s.X2 / weld) + "," + (long)Math.Round(s.Y2 / weld);
+        }
+
+        private static string SegKeyReversed(BoundarySeg s, double weld)
+        {
+            return (long)Math.Round(s.X2 / weld) + "," + (long)Math.Round(s.Y2 / weld) + ">" +
+                   (long)Math.Round(s.X1 / weld) + "," + (long)Math.Round(s.Y1 / weld);
+        }
+
+        private static double TurnAngleFromLoop(AuthorityBoundaryLoop loop, int index)
+        {
+            if (index <= 0 || loop?.Segments == null || index >= loop.Segments.Count) return 0;
+            var prev = loop.Segments[index - 1];
+            var cur = loop.Segments[index];
+            return TurnAngle(
+                new Pt2 { X = prev.X1, Y = prev.Y1 },
+                new Pt2 { X = prev.X2, Y = prev.Y2 },
+                new Pt2 { X = cur.X2, Y = cur.Y2 });
+        }
+
+        /// <summary>Min Z of generated curves vs max draped top Z (for support / regression checks).</summary>
+        public static string ElevationDiagnostic(FloorHatchInput input, FloorHatchResult build)
+        {
+            if (input == null || build == null || build.Segments.Count == 0) return null;
+            double top = double.NegativeInfinity;
+            foreach (var p in input.Pieces)
+            {
+                if (p?.Region == null || p.Region.IsEmpty) continue;
+                var cx = (p.Region.MinX + p.Region.MaxX) * 0.5;
+                var cy = (p.Region.MinY + p.Region.MaxY) * 0.5;
+                var z = p.ZAt(cx, cy);
+                if (z > top) top = z;
+            }
+            double minZ = double.PositiveInfinity;
+            double minHatchZ = double.PositiveInfinity;
+            double minEdgeZ = double.PositiveInfinity;
+            foreach (var s in build.Segments)
+            {
+                if (s.A.Z < minZ) minZ = s.A.Z;
+                if (s.B.Z < minZ) minZ = s.B.Z;
+                if (s.Layer?.Kind == PatternLayerKind.Edge)
+                {
+                    if (s.A.Z < minEdgeZ) minEdgeZ = s.A.Z;
+                    if (s.B.Z < minEdgeZ) minEdgeZ = s.B.Z;
+                }
+                else
+                {
+                    if (s.A.Z < minHatchZ) minHatchZ = s.A.Z;
+                    if (s.B.Z < minHatchZ) minHatchZ = s.B.Z;
+                }
+            }
+            if (!double.IsFinite(minZ) || !double.IsFinite(top)) return null;
+            var liftMm = (minZ - top) * 304.8;
+            var hatchMm = double.IsFinite(minHatchZ) ? (minHatchZ - top) * 304.8 : double.NaN;
+            var edgeMm = double.IsFinite(minEdgeZ) ? (minEdgeZ - top) * 304.8 : double.NaN;
+            return "elevations: min curve " + liftMm.ToString("0.##", CultureInfo.InvariantCulture) + " mm above draped top" +
+                   (double.IsFinite(hatchMm)
+                       ? ", hatch min " + hatchMm.ToString("0.##", CultureInfo.InvariantCulture) + " mm"
+                       : string.Empty) +
+                   (double.IsFinite(edgeMm)
+                       ? ", edge min " + edgeMm.ToString("0.##", CultureInfo.InvariantCulture) + " mm"
+                       : string.Empty);
         }
 
         private static List<Pt2> MergeConsecutiveCollinearInLoop(List<Pt2> loop, bool closed)

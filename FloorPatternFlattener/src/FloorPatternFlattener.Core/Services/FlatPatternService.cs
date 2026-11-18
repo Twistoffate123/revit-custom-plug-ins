@@ -186,6 +186,8 @@ namespace FloorPatternFlattener.Services
             if (build.SkippedShort > 0)
                 _report.AddWarning(floor, build.SkippedShort + " degenerate fragments could not be stored");
             foreach (var n in build.Notes) _report.AddWarning(floor, n);
+            var elev = FloorHatchBuilder.ElevationDiagnostic(input, build);
+            if (!string.IsNullOrEmpty(elev)) _report.AddWarning(floor, elev);
 
             DissolvePatternGroups(existing);
 
