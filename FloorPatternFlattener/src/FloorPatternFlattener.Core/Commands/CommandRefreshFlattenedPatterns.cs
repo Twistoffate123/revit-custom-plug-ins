@@ -30,23 +30,22 @@ namespace FloorPatternFlattener.Commands
                 var canEdit = CommandSupport.PrepareEditability(doc, floors);
                 var report = new FpfReport();
 
-                var ok = CommandSupport.RunTransaction(doc, "Refresh Flattened Patterns", report, () =>
-                {
-                    var svc = new FlatPatternService(doc, report, canEdit, uidoc?.ActiveView);
-                    var hideInView = LastHideLiveInActiveViewSetting.Load();
-                    foreach (var f in floors)
+                var svc = new FlatPatternService(doc, report, canEdit, uidoc?.ActiveView);
+                var hideInView = LastHideLiveInActiveViewSetting.Load();
+                var ok = CommandSupport.RunRefreshFloorsTransactionGroup(doc, "Refresh Flattened Patterns", report, floors,
+                    f =>
                     {
-                        if (!f.IsValidObject) continue;
-                        // Rebuild geometry only; view sync once below (avoids N×all-views per floor).
                         svc.Apply(f, ApplyMode.Force, false, hideLiveInActiveView: hideInView);
-                    }
-                    foreach (var f in floors)
+                    },
+                    () =>
                     {
-                        if (f.IsValidObject) svc.SyncNativePatternsForFloor(f.Id);
-                    }
-                    svc.CleanupOrphans();
-                    svc.HideAllShapesInSectionViews();
-                });
+                        foreach (var f in floors)
+                        {
+                            if (f.IsValidObject) svc.SyncNativePatternsForFloor(f.Id);
+                        }
+                        svc.CleanupOrphans();
+                        svc.HideAllShapesInSectionViews();
+                    });
 
                 CommandSupport.Show(ok ? "Refresh Flattened Patterns" : "Refresh Flattened Patterns - failed", report,
                     floors.Count + " flattened floor(s) regenerated.");

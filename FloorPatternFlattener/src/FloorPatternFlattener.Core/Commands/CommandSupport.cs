@@ -68,6 +68,44 @@ namespace FloorPatternFlattener.Commands
             return id => !denied.Contains(id) && Editability.CanEdit(doc, id);
         }
 
+        /// <summary>
+        /// One undo step via <see cref="TransactionGroup"/>, but one committed <see cref="Transaction"/> per floor so
+        /// Regen can run between heavy floors (avoids long UI freezes in Refresh).
+        /// </summary>
+        public static bool RunRefreshFloorsTransactionGroup(
+            Document doc, string groupName, FpfReport report, IList<Floor> floors,
+            Action<Floor> perFloor, Action afterAllFloors)
+        {
+            if (floors == null || floors.Count == 0) return true;
+            using (var tg = new TransactionGroup(doc, groupName))
+            {
+                if (tg.Start() != TransactionStatus.Started)
+                {
+                    report.Errors.Add("Could not start transaction group '" + groupName + "'.");
+                    return false;
+                }
+
+                foreach (var f in floors)
+                {
+                    if (f == null || !f.IsValidObject) continue;
+                    var label = "Refresh " + FpfReport.Describe(f);
+                    if (!RunTransaction(doc, label, report, () => perFloor(f))) return false;
+                }
+
+                if (afterAllFloors != null &&
+                    !RunTransaction(doc, "Refresh view cleanup", report, afterAllFloors))
+                    return false;
+
+                var status = tg.Assimilate();
+                if (status != TransactionStatus.Committed)
+                {
+                    report.Errors.Add("Transaction group '" + groupName + "' was not assimilated (" + status + ").");
+                    return false;
+                }
+                return true;
+            }
+        }
+
         /// <summary>Runs <paramref name="body"/> in one named, undoable transaction.</summary>
         public static bool RunTransaction(Document doc, string name, FpfReport report, Action body)
         {

@@ -433,9 +433,15 @@ namespace FloorPatternFlattener.Services
         /// line cannot drop the rest of the floor. There is no maximum number of shapes.
         /// </summary>
         private void CommitChunk(Floor floor, List<Segment3> segs, PatternLayer layer, List<DirectShape> existing,
-            List<DirectShape> created, List<DirectShape> shapes, int chunkIndex)
+            List<DirectShape> created, List<DirectShape> shapes, int chunkIndex, int splitDepth = 0)
         {
             if (segs == null || segs.Count == 0) return;
+            if (splitDepth > 48)
+            {
+                _report.AddWarning(floor, "Stopped splitting a hatch chunk after " + splitDepth +
+                                             " attempts (Revit kept rejecting lines).");
+                return;
+            }
             var ds = ShapeAt(floor, existing, created, shapes.Count);
             if (ds == null) return;
             var styleId = _styles.GetLineStyleId(layer);
@@ -447,8 +453,10 @@ namespace FloorPatternFlattener.Services
                     return;
                 }
                 var mid = segs.Count / 2;
-                CommitChunk(floor, segs.GetRange(0, mid), layer, existing, created, shapes, chunkIndex);
-                CommitChunk(floor, segs.GetRange(mid, segs.Count - mid), layer, existing, created, shapes, chunkIndex + 10000);
+                if (mid <= 0) return;
+                CommitChunk(floor, segs.GetRange(0, mid), layer, existing, created, shapes, chunkIndex, splitDepth + 1);
+                CommitChunk(floor, segs.GetRange(mid, segs.Count - mid), layer, existing, created, shapes,
+                    chunkIndex + 10000, splitDepth + 1);
                 return;
             }
 

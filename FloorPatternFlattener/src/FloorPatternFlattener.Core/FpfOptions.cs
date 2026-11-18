@@ -72,6 +72,9 @@ namespace FloorPatternFlattener
         /// <summary>Bump when hatch generation changes so stored signatures no longer match.</summary>
         public const int AlgorithmVersion = 15; // 15: world-Z 2/4 mm lifts, no read-back elevation pass
 
+        /// <summary>Post-build per-endpoint elevation read-back (removed: multi-minute hangs on large floors).</summary>
+        public const bool EnableElevationReadBack = false;
+
         /// <summary>Extensible storage schema version written into every entity.</summary>
         public const int SchemaDataVersion = 1;
 
