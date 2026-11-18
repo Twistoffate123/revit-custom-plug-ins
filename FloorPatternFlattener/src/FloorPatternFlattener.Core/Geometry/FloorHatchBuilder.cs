@@ -51,6 +51,9 @@ namespace FloorPatternFlattener.Geometry
         /// <summary>User cut-outs (columns, pits, sketch polygons) merged at build time.</summary>
         public List<RegionXY> CutoutRegions { get; } = new List<RegionXY>();
 
+        /// <summary>Parallel to <see cref="CutoutRegions"/> for cut-out logging (pick vs sketch).</summary>
+        public List<string> CutoutRegionKinds { get; } = new List<string>();
+
         /// <summary>When set, cut-out footprints are drawn as extra edge lines.</summary>
         public bool EmitCutoutOutline { get; set; }
 
@@ -849,6 +852,7 @@ namespace FloorPatternFlattener.Geometry
             if (input.CutoutRegions.Count > 0)
             {
                 var cutSw = Stopwatch.StartNew();
+                CutoutResolver.LogCutoutRegionsAgainstSegments(input, result.Segments);
                 var stats = CutoutSegmentClip.ClipSegmentListInPlace(result.Segments, input.CutoutRegions, minLen);
                 if (input.EmitCutoutOutline)
                     EmitCutoutOutlineEdges(input, minLen, result);

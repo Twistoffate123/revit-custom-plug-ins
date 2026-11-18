@@ -10,8 +10,16 @@ namespace FloorPatternFlattener.Services
 {
     internal sealed class CutoutResolveResult
     {
-        public List<RegionXY> Regions { get; } = new List<RegionXY>();
+        public List<ResolvedCutout> Entries { get; } = new List<ResolvedCutout>();
         public List<string> DependencyIds { get; } = new List<string>();
+    }
+
+    internal sealed class ResolvedCutout
+    {
+        public string Kind;
+        public RegionXY Region;
+        public int PointCount;
+        public double AreaFt2;
     }
 
     internal static class CutoutResolver
@@ -21,9 +29,12 @@ namespace FloorPatternFlattener.Services
             if (doc == null || floor == null || input == null || data == null || data.IsEmpty) return;
             var resolved = Resolve(doc, data);
             input.CutoutRegions.Clear();
-            foreach (var r in resolved.Regions)
+            input.CutoutRegionKinds.Clear();
+            foreach (var entry in resolved.Entries)
             {
-                if (r != null && !r.IsEmpty) input.CutoutRegions.Add(r);
+                if (entry.Region == null || entry.Region.IsEmpty) continue;
+                input.CutoutRegions.Add(entry.Region);
+                input.CutoutRegionKinds.Add(entry.Kind ?? "region");
             }
             foreach (var id in resolved.DependencyIds)
                 AddUnique(input.DependencyUniqueIds, id);
@@ -52,7 +63,8 @@ namespace FloorPatternFlattener.Services
                     var el = doc.GetElement(pick.ElementUniqueId);
                     region = CutoutFootprint.FromElement(doc, el, offsetFeet);
                 }
-                if (!region.IsEmpty) result.Regions.Add(region);
+                if (!region.IsEmpty)
+                    result.Entries.Add(new ResolvedCutout { Kind = "pick", Region = region });
             }
             foreach (var sketch in data.Sketches ?? new List<SketchCutout>())
             {
@@ -69,11 +81,89 @@ namespace FloorPatternFlattener.Services
                 }
                 var region = CutoutStorageCodec.SketchToRegion(sketch);
                 if (!region.IsEmpty)
-                    result.Regions.Add(region);
+                    result.Entries.Add(new ResolvedCutout
+                    {
+                        Kind = "sketch",
+                        Region = region,
+                        PointCount = sketch.Points.Count,
+                        AreaFt2 = area
+                    });
                 else
                     LogSkippedSketch("empty-region points=" + sketch.Points.Count);
             }
             return result;
+        }
+
+        /// <summary>Logs each cut-out region bbox and how many hatch segments may intersect it (plan feet, hatch XY).</summary>
+        public static void LogCutoutRegionsAgainstSegments(FloorHatchInput input, IList<Segment3> segments)
+        {
+            if (input == null || input.CutoutRegions.Count == 0) return;
+            double floorMinX = double.MaxValue, floorMinY = double.MaxValue;
+            double floorMaxX = double.MinValue, floorMaxY = double.MinValue;
+            var hasFloor = false;
+            foreach (var p in input.Pieces)
+            {
+                if (p?.Region == null || p.Region.IsEmpty) continue;
+                hasFloor = true;
+                if (p.Region.MinX < floorMinX) floorMinX = p.Region.MinX;
+                if (p.Region.MinY < floorMinY) floorMinY = p.Region.MinY;
+                if (p.Region.MaxX > floorMaxX) floorMaxX = p.Region.MaxX;
+                if (p.Region.MaxY > floorMaxY) floorMaxY = p.Region.MaxY;
+            }
+
+            for (var r = 0; r < input.CutoutRegions.Count; r++)
+            {
+                var region = input.CutoutRegions[r];
+                if (region == null || region.IsEmpty) continue;
+                var kind = r < input.CutoutRegionKinds.Count ? input.CutoutRegionKinds[r] : "region";
+                var area = CutoutCurveMath.AbsoluteArea(RegionToPointLoop(region));
+                var overlap = 0;
+                if (segments != null)
+                {
+                    foreach (var seg in segments)
+                    {
+                        if (seg?.A == null || seg?.B == null) continue;
+                        if (SegmentPolygonClipper.SegmentIntersectsAxisAlignedBox(
+                                seg.A.X, seg.A.Y, seg.B.X, seg.B.Y,
+                                region.MinX, region.MinY, region.MaxX, region.MaxY))
+                            overlap++;
+                    }
+                }
+
+                var floorNote = string.Empty;
+                if (hasFloor)
+                {
+                    const double tol = 0.5;
+                    var cx = (region.MinX + region.MaxX) * 0.5;
+                    var cy = (region.MinY + region.MaxY) * 0.5;
+                    if (cx < floorMinX - tol || cx > floorMaxX + tol || cy < floorMinY - tol || cy > floorMaxY + tol)
+                        floorNote = " frame=outside-floor-bbox";
+                }
+
+                FpfRefreshLog.LogIfActive("cutout", 0,
+                    "region kind=" + kind +
+                    " points=" + (region.EdgeCount).ToString(CultureInfo.InvariantCulture) +
+                    " areaFt2=" + area.ToString("R", CultureInfo.InvariantCulture) +
+                    " bbox=" + region.MinX.ToString("R", CultureInfo.InvariantCulture) + "," +
+                    region.MinY.ToString("R", CultureInfo.InvariantCulture) + "," +
+                    region.MaxX.ToString("R", CultureInfo.InvariantCulture) + "," +
+                    region.MaxY.ToString("R", CultureInfo.InvariantCulture) +
+                    " segOverlap=" + overlap.ToString(CultureInfo.InvariantCulture) + floorNote);
+            }
+        }
+
+        private static List<double[]> RegionToPointLoop(RegionXY region)
+        {
+            var pts = new List<double[]>();
+            if (region == null) return pts;
+            var e = region.RawEdges;
+            if (e.Count >= 4)
+            {
+                pts.Add(new[] { e[0], e[1] });
+                for (var i = 4; i < e.Count; i += 4)
+                    pts.Add(new[] { e[i], e[i + 1] });
+            }
+            return pts;
         }
 
         public static void LogCutoutPhase(Stopwatch sw, int regions, SegmentPolygonClipper.ClipStats stats)

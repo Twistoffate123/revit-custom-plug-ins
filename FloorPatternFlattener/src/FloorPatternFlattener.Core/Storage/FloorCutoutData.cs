@@ -55,6 +55,24 @@ namespace FloorPatternFlattener.Storage
                 if (!string.IsNullOrEmpty(p?.ElementUniqueId))
                     yield return p.ElementUniqueId;
         }
+
+        /// <summary>Removes stored sketch loops that are degenerate (e.g. old two-point circles).</summary>
+        public int PruneDegenerateSketches()
+        {
+            if (Sketches == null || Sketches.Count == 0) return 0;
+            var removed = 0;
+            for (var i = Sketches.Count - 1; i >= 0; i--)
+            {
+                var s = Sketches[i];
+                if (s?.Points == null || s.Points.Count < 3 ||
+                    CutoutCurveMath.IsDegenerateLoop(s.Points, out _))
+                {
+                    Sketches.RemoveAt(i);
+                    removed++;
+                }
+            }
+            return removed;
+        }
     }
 
     public sealed class PickedCutout

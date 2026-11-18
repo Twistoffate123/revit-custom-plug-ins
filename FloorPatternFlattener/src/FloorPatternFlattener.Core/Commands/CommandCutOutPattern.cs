@@ -63,6 +63,10 @@ namespace FloorPatternFlattener.Commands
                     }
                 }
 
+                var pruned = data.PruneDegenerateSketches();
+                if (pruned > 0)
+                    FpfRefreshLog.LogIfActive("cutout", 0, "pruned-degenerate-sketches=" + pruned.ToString(CultureInfo.InvariantCulture));
+
                 if (data.IsEmpty)
                 {
                     TaskDialog.Show(FpfOptions.ProductName, "No cut-outs to apply.");
