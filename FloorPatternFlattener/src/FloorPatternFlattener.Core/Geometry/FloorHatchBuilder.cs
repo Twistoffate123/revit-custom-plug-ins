@@ -5,6 +5,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using Autodesk.Revit.DB;
+using FloorPatternFlattener.Services;
 
 namespace FloorPatternFlattener.Geometry
 {
@@ -807,12 +808,15 @@ namespace FloorPatternFlattener.Geometry
         // ---------------------------------------------------------------- build
 
         private static double _floorLiftFeet;
+        private static double _planDisplayBaseZ;
+        private static bool _usePlanDisplayBaseZ;
 
-        public static FloorHatchResult Build(FloorHatchInput input, double shortCurveTolerance,
+        public static FloorHatchResult Build(FloorHatchInput input, Floor floor, double shortCurveTolerance,
             PatternPlacement placement = null, double additionalFloorLiftFeet = 0)
         {
             placement = placement ?? PatternPlacement.Identity;
             _floorLiftFeet = Math.Max(0, additionalFloorLiftFeet);
+            InitPlanDisplayBaseZ(floor, input);
             var result = new FloorHatchResult();
             if (input == null || input.Pieces.Count == 0) return result;
 
@@ -843,7 +847,81 @@ namespace FloorPatternFlattener.Geometry
                 " hatchAfter=" + result.Segments.Count.ToString(CultureInfo.InvariantCulture) +
                 " authorityLoops=" + input.AuthorityBoundaryLoops.Count.ToString(CultureInfo.InvariantCulture));
             _floorLiftFeet = 0;
+            _usePlanDisplayBaseZ = false;
             return result;
+        }
+
+        /// <summary>Last planned display base Z from the most recent <see cref="Build"/> (for view-range logging).</summary>
+        public static double LastPlanDisplayBaseZ { get; private set; }
+
+        private static void InitPlanDisplayBaseZ(Floor floor, FloorHatchInput input)
+        {
+            _usePlanDisplayBaseZ = false;
+            _planDisplayBaseZ = 0;
+            LastPlanDisplayBaseZ = double.NaN;
+            if (floor == null || input == null) return;
+
+            var planRef = PlanReferenceTopZ(floor);
+            var draped = SampleDrapedTopZ(input);
+            const double driftFeet = 0.5;
+            if (double.IsFinite(planRef) && double.IsFinite(draped) && Math.Abs(draped - planRef) > driftFeet)
+                _usePlanDisplayBaseZ = true;
+            else if (double.IsFinite(planRef) && !double.IsFinite(draped))
+                _usePlanDisplayBaseZ = true;
+
+            if (_usePlanDisplayBaseZ) _planDisplayBaseZ = planRef;
+            LastPlanDisplayBaseZ = _usePlanDisplayBaseZ ? planRef : draped;
+            Services.FpfRefreshLog.LogIfActive("plan-display-z", 0,
+                "planRef=" + (double.IsFinite(planRef) ? planRef.ToString("0.####", CultureInfo.InvariantCulture) : "n/a") +
+                " draped=" + (double.IsFinite(draped) ? draped.ToString("0.####", CultureInfo.InvariantCulture) : "n/a") +
+                " usePlanRef=" + (_usePlanDisplayBaseZ ? "1" : "0"));
+        }
+
+        private static double SampleDrapedTopZ(FloorHatchInput input)
+        {
+            if (input?.Pieces == null || input.Pieces.Count == 0) return double.NaN;
+            double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
+            foreach (var p in input.Pieces)
+            {
+                if (p?.Region == null || p.Region.IsEmpty) continue;
+                if (p.Region.MinX < minX) minX = p.Region.MinX;
+                if (p.Region.MinY < minY) minY = p.Region.MinY;
+                if (p.Region.MaxX > maxX) maxX = p.Region.MaxX;
+                if (p.Region.MaxY > maxY) maxY = p.Region.MaxY;
+            }
+
+            if (minX > maxX) return GeneratedElevationVerifier.SampleTopZ(input, 0, 0);
+            return GeneratedElevationVerifier.SampleTopZ(input, (minX + maxX) * 0.5, (minY + maxY) * 0.5);
+        }
+
+        /// <summary>Top Z used for plan visibility: floor bbox / level band, not internal origin miles away.</summary>
+        private static double PlanReferenceTopZ(Floor floor)
+        {
+            if (floor == null) return double.NaN;
+            try
+            {
+                var bb = floor.get_BoundingBox(null);
+                if (bb != null && double.IsFinite(bb.Max.Z)) return bb.Max.Z;
+            }
+            catch { /* ignore */ }
+
+            var doc = floor.Document;
+            var level = doc?.GetElement(floor.LevelId) as Level;
+            var z = level?.Elevation ?? 0;
+            try
+            {
+                var p = floor.get_Parameter(BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM);
+                if (p != null) z += p.AsDouble();
+            }
+            catch { /* ignore */ }
+
+            return z;
+        }
+
+        private static double SurfaceWorldZ(double x, double y, TopPiece piece)
+        {
+            if (!_usePlanDisplayBaseZ) return piece.ZAt(x, y);
+            return _planDisplayBaseZ;
         }
 
         private static readonly PatternLayer EdgeLayer = new PatternLayer
@@ -1040,7 +1118,7 @@ namespace FloorPatternFlattener.Geometry
         private static XYZ LiftAboveSurfaceWorldZ(double x, double y, TopPiece piece, double clearanceAboveTopFeet)
         {
             if (piece == null) return new XYZ(x, y, clearanceAboveTopFeet);
-            return new XYZ(x, y, piece.ZAt(x, y) + clearanceAboveTopFeet);
+            return new XYZ(x, y, SurfaceWorldZ(x, y, piece) + clearanceAboveTopFeet);
         }
 
         private static TopPiece HighestPieceAt(List<TopPiece> pieces, double x, double y)

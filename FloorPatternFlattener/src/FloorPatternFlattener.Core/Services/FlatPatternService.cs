@@ -168,6 +168,7 @@ namespace FloorPatternFlattener.Services
                 {
                     SyncNativePatterns(floor.Id);
                     HideShapesInSectionViews(existing);
+                    LogActiveViewVisibility(floor, existing);
                 }
                 return applyViewGraphics || touched || markChanged;
             }
@@ -201,7 +202,7 @@ namespace FloorPatternFlattener.Services
             FloorHatchResult build;
             {
                 var sw = Stopwatch.StartNew();
-                build = FloorHatchBuilder.Build(input, _doc.Application.ShortCurveTolerance, _currentPlacement, liftFeet);
+                build = FloorHatchBuilder.Build(input, floor, _doc.Application.ShortCurveTolerance, _currentPlacement, liftFeet);
                 sw.Stop();
                 FpfRefreshLog.LogIfActive("hatch-generation", sw.ElapsedMilliseconds,
                     "segments=" + build.Segments.Count.ToString(CultureInfo.InvariantCulture) +
@@ -248,7 +249,7 @@ namespace FloorPatternFlattener.Services
                 {
                     placementChanged = true;
                     _currentPlacement = placement;
-                    build = FloorHatchBuilder.Build(input, _doc.Application.ShortCurveTolerance, placement, liftFeet);
+                    build = FloorHatchBuilder.Build(input, floor, _doc.Application.ShortCurveTolerance, placement, liftFeet);
                     PatternAngleMatcher.RefreshFlatFromBuild(build, angleCheck);
                     _report.PatternAngles[_report.PatternAngles.Count - 1] =
                         PatternAngleMatcher.FormatForReport(floor, angleCheck);
@@ -336,6 +337,8 @@ namespace FloorPatternFlattener.Services
                 sw.Stop();
                 FpfRefreshLog.LogIfActive("section-hide", sw.ElapsedMilliseconds, "newShapesOnly=true");
             }
+
+            LogActiveViewVisibility(floor, shapes);
 
             return true;
         }
@@ -637,20 +640,51 @@ namespace FloorPatternFlattener.Services
         /// </summary>
         internal void SyncNativePatternInActiveViewOnly(ElementId floorId)
         {
-            if (_activeView == null || !CanEdit(_activeView.Id)) return;
+            var floor = _doc.GetElement(floorId) as Floor;
+            if (floor == null) return;
+            var link = FpfStorage.ReadFloor(floor);
+            var shapes = new List<DirectShape>();
+            if (link != null)
+            {
+                foreach (var uid in link.DirectShapeUniqueIds)
+                    if (_doc.GetElement(uid) is DirectShape ds) shapes.Add(ds);
+            }
+
+            LogActiveViewVisibility(floor, shapes);
+        }
+
+        private void LogActiveViewVisibility(Floor floor, IList<DirectShape> shapes)
+        {
+            if (_activeView == null)
+            {
+                FpfRefreshLog.LogIfActive("view-visibility", 0, "skipped=no-active-view");
+                return;
+            }
+
             var sw = Stopwatch.StartNew();
+            if (!CanEdit(_activeView.Id))
+            {
+                sw.Stop();
+                FpfRefreshLog.LogIfActive("view-visibility", sw.ElapsedMilliseconds,
+                    "viewId=" + _activeView.Id + " skipped=not-editable");
+                return;
+            }
+
             try
             {
-                ViewGraphics.SyncNativeSurfacePattern(_activeView, floorId);
+                var sampleZ = FloorHatchBuilder.LastPlanDisplayBaseZ;
+                if (!double.IsFinite(sampleZ)) sampleZ = 0;
+                sampleZ += FpfOptions.PatternAboveTopFeet;
+                var detail = ViewGraphics.EnsurePlanViewVisibility(_doc, _activeView, floor, shapes, sampleZ);
+                sw.Stop();
+                FpfRefreshLog.LogIfActive("view-visibility", sw.ElapsedMilliseconds, detail);
             }
             catch
             {
+                sw.Stop();
                 _report.ViewFailures++;
+                FpfRefreshLog.LogIfActive("view-visibility", sw.ElapsedMilliseconds, "viewId=" + _activeView.Id + " failed");
             }
-
-            sw.Stop();
-            FpfRefreshLog.LogIfActive("pattern-sync-active-view", sw.ElapsedMilliseconds,
-                "viewId=" + _activeView.Id.ToString());
         }
 
         /// <summary>One DirectShape per boundary run (straight side or tessellated arc span).</summary>
