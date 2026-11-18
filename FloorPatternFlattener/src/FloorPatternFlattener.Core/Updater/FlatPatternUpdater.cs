@@ -365,8 +365,16 @@ namespace FloorPatternFlattener.Updater
                     return;
                 }
 
-                link.ExtraLiftMm = param.Value;
-                FpfStorage.WriteDirectShape(ds, link);
+                try
+                {
+                    link.ExtraLiftMm = param.Value;
+                    FpfStorage.WriteDirectShape(ds, link);
+                }
+                catch (Exception storeEx)
+                {
+                    FpfRefreshLog.LogUpdater("extra-lift-stored-failed id=" + ds.Id + " " + storeEx.Message);
+                }
+
                 FpfRefreshLog.LogUpdater("extra-lift id=" + ds.Id +
                                          " mm=" + param.Value.ToString("0.##", CultureInfo.InvariantCulture) +
                                          " deltaMm=" + deltaMm.ToString("0.##", CultureInfo.InvariantCulture));

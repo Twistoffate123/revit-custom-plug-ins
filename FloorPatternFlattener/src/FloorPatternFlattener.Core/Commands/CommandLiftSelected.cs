@@ -77,24 +77,38 @@ namespace FloorPatternFlattener.Commands
                                 skippedEdit++;
                                 continue;
                             }
-                            try
+                            var geometryMoved = moveGroup;
+                            if (!moveGroup)
                             {
-                                if (!moveGroup && !ShapeZOffset.TryOffset(doc, ds, deltaFeet))
+                                try
                                 {
-                                    report.Errors.Add(FpfReport.Describe(ds) + ": could not move");
+                                    geometryMoved = ShapeZOffset.TryOffset(doc, ds, deltaFeet);
+                                }
+                                catch (Exception ex)
+                                {
+                                    report.Errors.Add(FpfReport.Describe(ds) + ": " + ex.Message);
                                     continue;
                                 }
+                            }
+                            if (!geometryMoved)
+                            {
+                                report.Errors.Add(FpfReport.Describe(ds) + ": could not move");
+                                continue;
+                            }
+                            moved++;
+                            try
+                            {
                                 var prev = FpfProjectParameters.ReadExtraLiftMm(ds) ?? 0;
                                 var next = prev + deltaMm;
                                 FpfProjectParameters.WriteExtraLiftMm(ds, next);
                                 var link = FpfStorage.ReadDirectShape(ds) ?? new DirectShapeLinkData();
                                 link.ExtraLiftMm = next;
                                 FpfStorage.WriteDirectShape(ds, link);
-                                moved++;
                             }
                             catch (Exception ex)
                             {
-                                report.Errors.Add(FpfReport.Describe(ds) + ": " + ex.Message);
+                                report.Errors.Add(FpfReport.Describe(ds) +
+                                                  " moved, but the lift value was not stored: " + ex.Message);
                             }
                         }
                     }

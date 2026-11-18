@@ -143,13 +143,24 @@ namespace FloorPatternFlattener.Storage
                     var b = NewBuilder(FloorLiftSchemaGuid, "FPF_FloorLift",
                         "Floor Pattern Flattener: lift above draped top (millimetres).");
                     b.AddSimpleField(FVersion, typeof(int));
-                    b.AddSimpleField(FLiftMm, typeof(double));
+                    // Millimetres stored as a plain number. A length spec forces every
+                    // Set/Get to pass a UnitTypeId, and the unitless overload then throws.
+                    b.AddSimpleField(FLiftMm, typeof(double)).SetSpec(SpecTypeId.Number);
                     return b.Finish();
                 }
             }
         }
 
         public static readonly Guid DirectShapeExtraSchemaGuid = new Guid("C5D9E8F2-A4B6-4C7D-9E0F-1A2B3C4D5E6F");
+
+        /// <summary>
+        /// Unitless replacement for <see cref="DirectShapeExtraSchemaGuid"/>. Models that already
+        /// finished the old schema keep it; new writes go here so Set does not require units.
+        /// </summary>
+        public static readonly Guid DirectShapeExtraNumberSchemaGuid = new Guid("D6E0F1A3-B5C7-4D8E-8F10-2B3C4D5E6F70");
+
+        /// <summary>Unitless replacement for <see cref="FloorLiftSchemaGuid"/>.</summary>
+        public static readonly Guid FloorLiftNumberSchemaGuid = new Guid("C4F9D6B2-803E-4FA7-9D21-6BAE4F802C53");
 
         public static Schema DirectShapeExtraSchema
         {
@@ -162,10 +173,84 @@ namespace FloorPatternFlattener.Storage
                     var b = NewBuilder(DirectShapeExtraSchemaGuid, "FPF_ShapeExtraLift",
                         "Floor Pattern Flattener: extra manual world-Z lift for one output (millimetres).");
                     b.AddSimpleField(FVersion, typeof(int));
-                    b.AddSimpleField(FExtraLiftMm, typeof(double));
+                    b.AddSimpleField(FExtraLiftMm, typeof(double)).SetSpec(SpecTypeId.Number);
                     return b.Finish();
                 }
             }
+        }
+
+        public static Schema DirectShapeExtraNumberSchema
+        {
+            get
+            {
+                lock (Gate)
+                {
+                    var s = Schema.Lookup(DirectShapeExtraNumberSchemaGuid);
+                    if (s != null) return s;
+                    var b = NewBuilder(DirectShapeExtraNumberSchemaGuid, "FPF_ShapeExtraLiftNumber",
+                        "Floor Pattern Flattener: extra manual lift in millimetres, stored as a unitless number.");
+                    b.AddSimpleField(FVersion, typeof(int));
+                    b.AddSimpleField(FExtraLiftMm, typeof(double)).SetSpec(SpecTypeId.Number);
+                    return b.Finish();
+                }
+            }
+        }
+
+        public static Schema FloorLiftNumberSchema
+        {
+            get
+            {
+                lock (Gate)
+                {
+                    var s = Schema.Lookup(FloorLiftNumberSchemaGuid);
+                    if (s != null) return s;
+                    var b = NewBuilder(FloorLiftNumberSchemaGuid, "FPF_FloorLiftNumber",
+                        "Floor Pattern Flattener: floor lift in millimetres, stored as a unitless number.");
+                    b.AddSimpleField(FVersion, typeof(int));
+                    b.AddSimpleField(FLiftMm, typeof(double)).SetSpec(SpecTypeId.Number);
+                    return b.Finish();
+                }
+            }
+        }
+
+        /// <summary>
+        /// True when the field was finished with a measurable spec (Length and similar).
+        /// Those fields reject <c>Set/Get</c> unless a <see cref="ForgeTypeId"/> unit is passed.
+        /// <see cref="SpecTypeId.Number"/> is unitless and uses the plain overload.
+        /// </summary>
+        private static bool FieldNeedsUnits(Field field)
+        {
+            if (field == null) return false;
+            ForgeTypeId spec;
+            try { spec = field.GetSpecTypeId(); }
+            catch { return false; }
+            if (spec == null) return false;
+            string typeId;
+            try { typeId = spec.TypeId; }
+            catch { return false; }
+            if (string.IsNullOrEmpty(typeId)) return false;
+            if (spec.Equals(SpecTypeId.Number)) return false;
+            try { return UnitUtils.IsMeasurableSpec(spec); }
+            catch { return false; }
+        }
+
+        private static double ReadMillimetres(Entity entity, string fieldName)
+        {
+            var field = entity.Schema.GetField(fieldName);
+            if (field == null) return 0;
+            if (FieldNeedsUnits(field))
+                return entity.Get<double>(field, UnitTypeId.Millimeters);
+            return entity.Get<double>(field);
+        }
+
+        private static void WriteMillimetres(Entity entity, string fieldName, double millimetres)
+        {
+            var field = entity.Schema.GetField(fieldName);
+            if (field == null) return;
+            if (FieldNeedsUnits(field))
+                entity.Set(field, millimetres, UnitTypeId.Millimeters);
+            else
+                entity.Set(field, millimetres);
         }
 
         private static SchemaBuilder NewBuilder(Guid guid, string name, string doc)
@@ -408,26 +493,21 @@ namespace FloorPatternFlattener.Storage
         public static double? ReadFloorLiftMm(Element floor)
         {
             if (floor == null) return null;
-            try
-            {
-                var schema = Schema.Lookup(FloorLiftSchemaGuid);
-                if (schema == null) return null;
-                var e = floor.GetEntity(schema);
-                if (e == null || !e.IsValid()) return null;
-                return e.Get<double>(FLiftMm);
-            }
-            catch
-            {
-                return null;
-            }
+            var number = ReadMillimetresFrom(floor, FloorLiftNumberSchemaGuid, FLiftMm);
+            if (number.HasValue) return number;
+            return ReadMillimetresFrom(floor, FloorLiftSchemaGuid, FLiftMm);
         }
 
         public static void WriteFloorLiftMm(Element floor, double mm)
         {
-            var e = new Entity(FloorLiftSchema);
+            if (floor == null) return;
+            // Always the unitless schema. The older LiftMm field may be a length spec;
+            // writing that one without a unit aborts the transaction.
+            var e = new Entity(FloorLiftNumberSchema);
             e.Set(FVersion, FpfOptions.SchemaDataVersion);
-            e.Set(FLiftMm, mm);
+            WriteMillimetres(e, FLiftMm, mm);
             floor.SetEntity(e);
+            TryWriteLegacyMillimetres(floor, FloorLiftSchema, FLiftMm, mm);
         }
 
         // ------------------------------------------------------------ direct shape
@@ -444,19 +524,9 @@ namespace FloorPatternFlattener.Storage
             try { d.Version = e.Get<int>(FVersion); } catch { /* ignore */ }
             try { d.SourceFloorUniqueId = e.Get<string>(FSource) ?? string.Empty; } catch { /* ignore */ }
             try { d.ChunkIndex = e.Get<int>(FChunk); } catch { /* ignore */ }
-            try
-            {
-                var exSchema = Schema.Lookup(DirectShapeExtraSchemaGuid);
-                if (exSchema != null)
-                {
-                    var ex = ds.GetEntity(exSchema);
-                    if (ex != null && ex.IsValid()) d.ExtraLiftMm = ex.Get<double>(FExtraLiftMm);
-                }
-            }
-            catch
-            {
-                // ignore
-            }
+            var extra = ReadMillimetresFrom(ds, DirectShapeExtraNumberSchemaGuid, FExtraLiftMm)
+                        ?? ReadMillimetresFrom(ds, DirectShapeExtraSchemaGuid, FExtraLiftMm);
+            if (extra.HasValue) d.ExtraLiftMm = extra.Value;
             return d;
         }
 
@@ -467,13 +537,54 @@ namespace FloorPatternFlattener.Storage
             e.Set(FSource, data.SourceFloorUniqueId ?? string.Empty);
             e.Set(FChunk, data.ChunkIndex);
             ds.SetEntity(e);
-            if (Math.Abs(data.ExtraLiftMm) > 1.0e-9)
+            var ex = new Entity(DirectShapeExtraNumberSchema);
+            ex.Set(FVersion, FpfOptions.SchemaDataVersion);
+            WriteMillimetres(ex, FExtraLiftMm, data.ExtraLiftMm);
+            ds.SetEntity(ex);
+            TryWriteLegacyMillimetres(ds, DirectShapeExtraSchema, FExtraLiftMm, data.ExtraLiftMm);
+        }
+
+        private static double? ReadMillimetresFrom(Element element, Guid schemaGuid, string fieldName)
+        {
+            try
             {
-                var ex = new Entity(DirectShapeExtraSchema);
-                ex.Set(FVersion, FpfOptions.SchemaDataVersion);
-                ex.Set(FExtraLiftMm, data.ExtraLiftMm);
-                ds.SetEntity(ex);
+                var schema = Schema.Lookup(schemaGuid);
+                if (schema == null) return null;
+                var entity = element.GetEntity(schema);
+                if (entity == null || !entity.IsValid()) return null;
+                var field = entity.Schema.GetField(fieldName);
+                if (field == null || !CanReadDouble(field)) return null;
+                return ReadMillimetres(entity, fieldName);
             }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Writes the legacy schema only when its double field has an explicit spec, so the
+        /// call uses the matching overload and cannot throw "Units are required".
+        /// </summary>
+        private static void TryWriteLegacyMillimetres(Element element, Schema schema, string fieldName, double millimetres)
+        {
+            if (element == null || schema == null || !schema.IsValidObject) return;
+            var field = schema.GetField(fieldName);
+            if (!CanReadDouble(field)) return;
+            var entity = new Entity(schema);
+            entity.Set(FVersion, FpfOptions.SchemaDataVersion);
+            WriteMillimetres(entity, fieldName, millimetres);
+            element.SetEntity(entity);
+        }
+
+        private static bool CanReadDouble(Field field)
+        {
+            if (field == null) return false;
+            if (FieldNeedsUnits(field)) return true;
+            ForgeTypeId spec;
+            try { spec = field.GetSpecTypeId(); }
+            catch { return false; }
+            return spec != null && spec.Equals(SpecTypeId.Number);
         }
 
         // ------------------------------------------------------------ queries
