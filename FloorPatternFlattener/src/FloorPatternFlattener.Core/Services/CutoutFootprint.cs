@@ -126,9 +126,25 @@ namespace FloorPatternFlattener.Services
         {
             foreach (Face face in solid.Faces)
             {
-                var mesh = face.Triangulate();
-                if (mesh == null) continue;
-                ProjectMesh(mesh, tr, region);
+                try
+                {
+                    var mesh = face.Triangulate();
+                    if (mesh != null) ProjectMesh(mesh, tr, region);
+                }
+                catch { /* ignore */ }
+
+                try
+                {
+                    foreach (EdgeArray loop in face.EdgeLoops)
+                    {
+                        foreach (Edge edge in loop)
+                        {
+                            var curve = edge.AsCurveFollowingFace(face);
+                            if (curve != null) CutoutPlanCurve.AddCurveEdgesToRegion(region, curve, tr);
+                        }
+                    }
+                }
+                catch { /* ignore */ }
             }
         }
 

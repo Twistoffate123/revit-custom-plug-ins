@@ -267,16 +267,17 @@ namespace FloorPatternFlattener.Commands
                 {
                     var refs = uidoc.Selection.PickObjects(ObjectType.Element, new LineSketchFilter(),
                         "Pick model or detail lines (Finish)");
-                    var region = new RegionXY();
+                    var curves = new List<Curve>();
                     foreach (var r in refs)
                     {
                         var curve = CurveFromElement(doc.GetElement(r.ElementId));
-                        if (curve == null) continue;
-                        var pts = curve.Tessellate();
-                        for (var i = 0; i + 1 < pts.Count; i++)
-                            region.AddEdge(pts[i].X, pts[i].Y, pts[i + 1].X, pts[i + 1].Y);
+                        if (curve != null) curves.Add(curve);
                     }
-                    sketch = CutoutStorageCodec.RegionToSketch(region);
+                    var sketches = CutoutPlanCurve.SketchesFromModelCurves(curves);
+                    if (sketches.Count == 0) return false;
+                    foreach (var s in sketches)
+                        data.Sketches.Add(s);
+                    return true;
                 }
                 else
                 {
@@ -296,6 +297,7 @@ namespace FloorPatternFlattener.Commands
                     }
                 }
                 if (sketch == null || sketch.Points.Count < 3) return false;
+                if (CutoutCurveMath.IsDegenerateLoop(sketch.Points, out _)) return false;
                 data.Sketches.Add(sketch);
                 return true;
             }

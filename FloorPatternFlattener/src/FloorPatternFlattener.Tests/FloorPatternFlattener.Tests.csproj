@@ -16,6 +16,7 @@
     <Compile Include="..\FloorPatternFlattener.Core\Geometry\PolygonClipper.cs" Link="PolygonClipper.cs" />
     <Compile Include="..\FloorPatternFlattener.Core\Geometry\SegmentPolygonClipper.cs" Link="SegmentPolygonClipper.cs" />
     <Compile Include="..\FloorPatternFlattener.Core\Storage\FloorCutoutData.cs" Link="FloorCutoutData.cs" />
+    <Compile Include="..\FloorPatternFlattener.Core\Geometry\CutoutCurveMath.cs" Link="CutoutCurveMath.cs" />
     <Compile Include="..\FloorPatternFlattener.Core\Storage\EsFieldCatalog.cs" Link="EsFieldCatalog.cs" />
     <Compile Include="..\FloorPatternFlattener.Core\Services\SharedParameterFileCheck.cs" Link="SharedParameterFileCheck.cs" />
   </ItemGroup>

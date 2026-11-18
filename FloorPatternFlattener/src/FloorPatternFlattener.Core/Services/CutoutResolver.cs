@@ -56,8 +56,22 @@ namespace FloorPatternFlattener.Services
             }
             foreach (var sketch in data.Sketches ?? new List<SketchCutout>())
             {
+                if (sketch?.Points == null || sketch.Points.Count < 3)
+                {
+                    LogSkippedSketch("points=" + (sketch?.Points?.Count ?? 0));
+                    continue;
+                }
+                if (CutoutCurveMath.IsDegenerateLoop(sketch.Points, out var area))
+                {
+                    LogSkippedSketch("degenerate areaFt2=" + area.ToString("R", CultureInfo.InvariantCulture) +
+                                     " points=" + sketch.Points.Count);
+                    continue;
+                }
                 var region = CutoutStorageCodec.SketchToRegion(sketch);
-                if (!region.IsEmpty) result.Regions.Add(region);
+                if (!region.IsEmpty)
+                    result.Regions.Add(region);
+                else
+                    LogSkippedSketch("empty-region points=" + sketch.Points.Count);
             }
             return result;
         }
@@ -69,6 +83,11 @@ namespace FloorPatternFlattener.Services
                 " removed=" + stats.Removed.ToString(CultureInfo.InvariantCulture) +
                 " clipped=" + stats.Clipped.ToString(CultureInfo.InvariantCulture) +
                 " kept=" + stats.Kept.ToString(CultureInfo.InvariantCulture));
+        }
+
+        private static void LogSkippedSketch(string detail)
+        {
+            FpfRefreshLog.LogIfActive("cutout", 0, "skip-sketch " + (detail ?? ""));
         }
 
         private static void AddUnique(List<string> list, string id)
