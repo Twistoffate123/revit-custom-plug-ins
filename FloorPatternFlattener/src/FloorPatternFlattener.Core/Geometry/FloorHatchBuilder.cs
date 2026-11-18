@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -521,7 +522,6 @@ namespace FloorPatternFlattener.Geometry
                 {
                     var pts = edge.Tessellate();
                     if (pts == null) continue;
-                    AppendBoundaryLoopEdges(pts, piece, input);
                     AppendAuthoritySegmentsFromTessellation(pts, auth.Segments);
                 }
                 if (auth.Segments.Count > 0)
@@ -834,7 +834,14 @@ namespace FloorPatternFlattener.Geometry
             foreach (var group in groups.Values)
                 BuildGroup(group, input.Holes, placement, minLen, dotLen, result);
 
+            var hatchBefore = result.Segments.Count;
+            var sw = Stopwatch.StartNew();
             AppendBoundary(input, minLen, result);
+            sw.Stop();
+            Services.FpfRefreshLog.LogIfActive("boundary-clip", sw.ElapsedMilliseconds,
+                "hatchBefore=" + hatchBefore.ToString(CultureInfo.InvariantCulture) +
+                " hatchAfter=" + result.Segments.Count.ToString(CultureInfo.InvariantCulture) +
+                " authorityLoops=" + input.AuthorityBoundaryLoops.Count.ToString(CultureInfo.InvariantCulture));
             _floorLiftFeet = 0;
             return result;
         }
@@ -1113,139 +1120,34 @@ namespace FloorPatternFlattener.Geometry
         }
 
         /// <summary>
-        /// Outer silhouette plus opening loops, from Revit face edge loops only.
-        /// Shared top-face edges appear twice and are dropped; triangulation fold lines are never used.
+        /// Hatch inset and floor-edge lines from Revit <see cref="Face.EdgeLoops"/> only (no tessellation silhouette mesh).
         /// </summary>
         private static void AppendBoundary(FloorHatchInput input, double minLen, FloorHatchResult result)
         {
-            var weld = FpfOptions.MeshCrackBridgeFeet;
-            var edges = new List<BEdge>();
-            foreach (var be in input.BoundaryEdges)
-            {
-                if (be?.Piece == null) continue;
-                edges.Add(new BEdge
-                {
-                    X1 = be.X1, Y1 = be.Y1, X2 = be.X2, Y2 = be.Y2, Piece = be.Piece
-                });
-            }
-            if (edges.Count == 0) return;
+            var cleaned = BuildAuthorityClipLoops(input, minLen, out var closed);
+            if (cleaned.Count > 0)
+                ClipHatchToInset(result, cleaned, closed, minLen);
+            var maxSpan = PlanDiagonalFeet(input);
+            EmitAuthorityEdgeLoops(input, minLen, result.Segments, maxSpan);
+        }
 
-            var idOf = new Dictionary<WeldKey, int>();
-            var vx = new List<double>();
-            var vy = new List<double>();
-            int Vid(double x, double y)
-            {
-                var key = new WeldKey { X = (long)Math.Round(x / weld), Y = (long)Math.Round(y / weld) };
-                if (idOf.TryGetValue(key, out var id)) return id;
-                id = vx.Count;
-                idOf[key] = id;
-                vx.Add(x);
-                vy.Add(y);
-                return id;
-            }
-
-            foreach (var e in edges)
-            {
-                e.A = Vid(e.X1, e.Y1);
-                e.B = Vid(e.X2, e.Y2);
-            }
-
-            var grid = new Dictionary<WeldKey, List<int>>();
-            var cell = Math.Max(weld * 8.0, 1.0);
-            for (var i = 0; i < vx.Count; i++)
-            {
-                var ck = new WeldKey { X = (long)Math.Floor(vx[i] / cell), Y = (long)Math.Floor(vy[i] / cell) };
-                if (!grid.TryGetValue(ck, out var bucket)) grid[ck] = bucket = new List<int>();
-                bucket.Add(i);
-            }
-
-            var micro = new List<BEdge>();
-            foreach (var e in edges)
-            {
-                if (e.A == e.B) continue;
-                var dx = e.X2 - e.X1;
-                var dy = e.Y2 - e.Y1;
-                var len2 = dx * dx + dy * dy;
-                if (len2 < 1.0e-18) continue;
-
-                var ts = new List<double> { 0, 1 };
-                var ids = new List<int> { e.A, e.B };
-                var c0x = (long)Math.Floor(Math.Min(e.X1, e.X2) / cell) - 1;
-                var c1x = (long)Math.Floor(Math.Max(e.X1, e.X2) / cell) + 1;
-                var c0y = (long)Math.Floor(Math.Min(e.Y1, e.Y2) / cell) - 1;
-                var c1y = (long)Math.Floor(Math.Max(e.Y1, e.Y2) / cell) + 1;
-                if (c1x - c0x <= 10000 && c1y - c0y <= 10000)
-                {
-                    for (var cx = c0x; cx <= c1x; cx++)
-                    for (var cy = c0y; cy <= c1y; cy++)
-                    {
-                        if (!grid.TryGetValue(new WeldKey { X = cx, Y = cy }, out var vs)) continue;
-                        for (var vi = 0; vi < vs.Count; vi++)
-                        {
-                            var v = vs[vi];
-                            if (v == e.A || v == e.B) continue;
-                            var t = ((vx[v] - e.X1) * dx + (vy[v] - e.Y1) * dy) / len2;
-                            if (t <= 1.0e-4 || t >= 1.0 - 1.0e-4) continue;
-                            var px = e.X1 + t * dx;
-                            var py = e.Y1 + t * dy;
-                            var ex = px - vx[v];
-                            var ey = py - vy[v];
-                            if (ex * ex + ey * ey <= weld * weld)
-                            {
-                                ts.Add(t);
-                                ids.Add(v);
-                            }
-                        }
-                    }
-                }
-
-                var order = new int[ts.Count];
-                for (var i = 0; i < order.Length; i++) order[i] = i;
-                Array.Sort(order, (i, j) => ts[i].CompareTo(ts[j]));
-                var prevT = -1.0;
-                var prevId = -1;
-                for (var oi = 0; oi < order.Length; oi++)
-                {
-                    var t = ts[order[oi]];
-                    var id = ids[order[oi]];
-                    if (prevId >= 0 && t - prevT > 1.0e-6 && id != prevId)
-                    {
-                        micro.Add(new BEdge
-                        {
-                            A = prevId, B = id, Piece = e.Piece,
-                            X1 = vx[prevId], Y1 = vy[prevId], X2 = vx[id], Y2 = vy[id]
-                        });
-                    }
-                    if (prevId < 0 || t - prevT > 1.0e-6)
-                    {
-                        prevT = t;
-                        prevId = id;
-                    }
-                }
-            }
-
-            var count = new Dictionary<PairKey, int>();
-            var sample = new Dictionary<PairKey, BEdge>();
-            foreach (var e in micro)
-            {
-                if (e.A == e.B) continue;
-                var key = new PairKey(e.A, e.B);
-                count.TryGetValue(key, out var n);
-                count[key] = n + 1;
-                if (n == 0) sample[key] = e;
-            }
-
-            var boundary = new List<BEdge>();
-            foreach (var kv in count)
-                if (kv.Value == 1) boundary.Add(sample[kv.Key]);
-            boundary = DedupEdges(boundary);
-
-            var loops = ChainLoops(boundary);
-            loops.AddRange(ChainLoops(UncoveredHoleEdges(input, boundary)));
+        private static List<List<Pt2>> BuildAuthorityClipLoops(FloorHatchInput input, double minLen, out List<bool> closed)
+        {
+            closed = new List<bool>();
             var cleaned = new List<List<Pt2>>();
-            var closed = new List<bool>();
-            foreach (var loop in loops)
+            foreach (var auth in input.AuthorityBoundaryLoops)
             {
+                if (auth?.Segments == null || auth.Segments.Count < 2) continue;
+                var loop = new List<Pt2>();
+                foreach (var s in auth.Segments)
+                {
+                    if (loop.Count == 0 ||
+                        Math.Abs(loop[loop.Count - 1].X - s.X1) > 1.0e-9 ||
+                        Math.Abs(loop[loop.Count - 1].Y - s.Y1) > 1.0e-9)
+                        loop.Add(new Pt2 { X = s.X1, Y = s.Y1 });
+                    loop.Add(new Pt2 { X = s.X2, Y = s.Y2 });
+                }
+
                 var c = CleanLoop(loop, minLen, out var isClosed);
                 if (c.Count >= 2)
                 {
@@ -1254,8 +1156,47 @@ namespace FloorPatternFlattener.Geometry
                 }
             }
 
-            ClipHatchToInset(result, cleaned, closed, minLen);
-            EmitAuthorityEdgeLoops(input, minLen, result.Segments);
+            if (cleaned.Count == 0 && input.UsedSketchFallback && input.BoundaryEdges.Count > 0)
+            {
+                var edges = new List<BEdge>();
+                foreach (var be in input.BoundaryEdges)
+                {
+                    if (be?.Piece == null) continue;
+                    edges.Add(new BEdge { X1 = be.X1, Y1 = be.Y1, X2 = be.X2, Y2 = be.Y2, Piece = be.Piece });
+                }
+
+                edges = DedupEdges(edges);
+                foreach (var loop in ChainLoops(edges))
+                {
+                    var c = CleanLoop(loop, minLen, out var isClosed);
+                    if (c.Count >= 2)
+                    {
+                        cleaned.Add(c);
+                        closed.Add(isClosed);
+                    }
+                }
+            }
+
+            return cleaned;
+        }
+
+        private static double PlanDiagonalFeet(FloorHatchInput input)
+        {
+            if (input?.Pieces == null || input.Pieces.Count == 0) return 0;
+            double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
+            foreach (var p in input.Pieces)
+            {
+                if (p?.Region == null || p.Region.IsEmpty) continue;
+                if (p.Region.MinX < minX) minX = p.Region.MinX;
+                if (p.Region.MinY < minY) minY = p.Region.MinY;
+                if (p.Region.MaxX > maxX) maxX = p.Region.MaxX;
+                if (p.Region.MaxY > maxY) maxY = p.Region.MaxY;
+            }
+
+            if (minX > maxX || minY > maxY) return 0;
+            var dx = maxX - minX;
+            var dy = maxY - minY;
+            return Math.Sqrt(dx * dx + dy * dy);
         }
 
         /// <summary>Drops a shorter edge that lies on top of a longer one (the usual cause of a thick/thin outline).</summary>
@@ -1545,7 +1486,8 @@ namespace FloorPatternFlattener.Geometry
         }
 
         /// <summary>Only Revit edge-loop segments with silhouette count 1 (drops shared triangulation/internal edges).</summary>
-        private static void EmitAuthorityEdgeLoops(FloorHatchInput input, double minLen, List<Segment3> target)
+        private static void EmitAuthorityEdgeLoops(FloorHatchInput input, double minLen, List<Segment3> target,
+            double planDiagonalFeet)
         {
             var pieces = input.Pieces;
             var weld = FpfOptions.MeshCrackBridgeFeet;
@@ -1561,8 +1503,10 @@ namespace FloorPatternFlattener.Geometry
                 }
             }
 
+            var maxEdge = planDiagonalFeet > 0 ? planDiagonalFeet * 0.98 + minLen : double.PositiveInfinity;
             var cornerRad = 2.0 * Math.PI / 180.0;
             var runId = 0;
+            var skippedSpan = 0;
             foreach (var auth in input.AuthorityBoundaryLoops)
             {
                 if (auth?.Segments == null || auth.Segments.Count == 0) continue;
@@ -1574,6 +1518,13 @@ namespace FloorPatternFlattener.Geometry
                 {
                     var s = auth.Segments[i];
                     if (!counts.TryGetValue(SilhouetteKey(s, weld), out var c) || c != 1) continue;
+                    var len2d = Math.Sqrt((s.X2 - s.X1) * (s.X2 - s.X1) + (s.Y2 - s.Y1) * (s.Y2 - s.Y1));
+                    if (len2d > maxEdge)
+                    {
+                        skippedSpan++;
+                        continue;
+                    }
+
                     if (i > 0 && TurnAngleFromLoop(auth, i) >= cornerRad)
                         sideRun = ++runId;
                     var pieceA = PieceNearest(pieces, s.X1, s.Y1) ?? defPiece;
@@ -1584,6 +1535,11 @@ namespace FloorPatternFlattener.Geometry
                     target.Add(new Segment3 { A = a, B = b, Layer = EdgeLayer, EdgeRun = sideRun });
                 }
             }
+
+            if (skippedSpan > 0)
+                Services.FpfRefreshLog.LogIfActive("edge-span-filter", 0,
+                    "rejected=" + skippedSpan.ToString(CultureInfo.InvariantCulture) +
+                    " max2dFt=" + maxEdge.ToString("0.####", CultureInfo.InvariantCulture));
         }
 
         private static string SilhouetteKey(BoundarySeg s, double weld)

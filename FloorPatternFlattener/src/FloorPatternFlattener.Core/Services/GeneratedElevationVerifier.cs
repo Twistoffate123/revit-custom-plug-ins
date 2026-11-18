@@ -139,18 +139,8 @@ namespace FloorPatternFlattener.Services
         public static void TryAlignGroupToFloor(Document doc, Group group, Floor floor)
         {
             if (doc == null || group == null || floor == null) return;
+            // Set reference level only; do not write GROUP_OFFSET_FROM_LEVEL (display metadata, not geometry).
             TrySetGroupLevel(group, floor.LevelId);
-            try
-            {
-                var fh = floor.get_Parameter(BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM);
-                var gh = group.get_Parameter(BuiltInParameter.GROUP_OFFSET_FROM_LEVEL);
-                if (fh != null && gh != null && !gh.IsReadOnly && gh.StorageType == StorageType.Double)
-                    gh.Set(fh.AsDouble());
-            }
-            catch
-            {
-                // ignore
-            }
         }
 
         public static string FormatFtMm(double feet)

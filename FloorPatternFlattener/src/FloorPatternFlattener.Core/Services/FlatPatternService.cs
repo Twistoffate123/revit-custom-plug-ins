@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
 using System.Linq;
 using Autodesk.Revit.DB;
 using FloorPatternFlattener.Geometry;
@@ -37,6 +39,8 @@ namespace FloorPatternFlattener.Services
         private Dictionary<string, List<DirectShape>> _shapesBySource;
         private Dictionary<int, double> _extraLiftByChunk = new Dictionary<int, double>();
         private double _currentFloorLiftMm;
+        private int _commitChunkSplits;
+        private int _commitChunkSetShapeFailures;
 
         public FlatPatternService(Document doc, FpfReport report, Func<ElementId, bool> canEdit, View activeView = null)
         {
@@ -82,6 +86,9 @@ namespace FloorPatternFlattener.Services
         private bool ApplyCore(Floor floor, ApplyMode mode, bool applyViewGraphics, FlattenStyle? requestedStyle,
             PatternPlacement requestedPlacement, bool? requestedHideLive, double? requestedFloorLiftMm)
         {
+            FpfRefreshLog.Current?.BeginFloor(floor);
+            _commitChunkSplits = 0;
+            _commitChunkSetShapeFailures = 0;
             // "Hide live floor pattern and fold lines": a mark in the floor's Comments that the
             // "FPF - Live Floor (hidden pattern)" view filter keys on (works through links, "By Host View").
             var markChanged = false;
@@ -136,7 +143,14 @@ namespace FloorPatternFlattener.Services
             FloorHatchInput input;
             try
             {
+                var sw = Stopwatch.StartNew();
                 input = FloorHatchBuilder.ReadInput(floor, _patterns);
+                sw.Stop();
+                FpfRefreshLog.LogIfActive("collect-faces", sw.ElapsedMilliseconds,
+                    "solids=" + input.SolidsSeen.ToString(CultureInfo.InvariantCulture) +
+                    " faces=" + input.FacesSeen.ToString(CultureInfo.InvariantCulture) +
+                    " pieces=" + input.Pieces.Count.ToString(CultureInfo.InvariantCulture) +
+                    " authorityLoops=" + input.AuthorityBoundaryLoops.Count.ToString(CultureInfo.InvariantCulture));
             }
             catch (Exception ex)
             {
@@ -184,7 +198,16 @@ namespace FloorPatternFlattener.Services
             foreach (var note in input.Notes) _report.AddWarning(floor, note);
 
             var liftFeet = AdditionalLiftFeet(_currentFloorLiftMm);
-            var build = FloorHatchBuilder.Build(input, _doc.Application.ShortCurveTolerance, _currentPlacement, liftFeet);
+            FloorHatchResult build;
+            {
+                var sw = Stopwatch.StartNew();
+                build = FloorHatchBuilder.Build(input, _doc.Application.ShortCurveTolerance, _currentPlacement, liftFeet);
+                sw.Stop();
+                FpfRefreshLog.LogIfActive("hatch-generation", sw.ElapsedMilliseconds,
+                    "segments=" + build.Segments.Count.ToString(CultureInfo.InvariantCulture) +
+                    " skippedShort=" + build.SkippedShort.ToString(CultureInfo.InvariantCulture));
+            }
+
             if (build.Segments.Count == 0)
             {
                 var why = "pattern produced no lines";
@@ -198,7 +221,12 @@ namespace FloorPatternFlattener.Services
                 _report.AddWarning(floor, build.SkippedShort + " degenerate fragments could not be stored");
             foreach (var n in build.Notes) _report.AddWarning(floor, n);
 
-            DissolvePatternGroups(existing);
+            {
+                var sw = Stopwatch.StartNew();
+                DissolvePatternGroups(existing);
+                sw.Stop();
+                FpfRefreshLog.LogIfActive("dissolve-groups", sw.ElapsedMilliseconds, "shapes=" + existing.Count.ToString(CultureInfo.InvariantCulture));
+            }
 
             if (legacySurface)
             {
@@ -229,7 +257,16 @@ namespace FloorPatternFlattener.Services
 
             var shapes = new List<DirectShape>();
             var created = new List<DirectShape>();
-            BuildLineShapes(floor, input, build, existing, shapes, created);
+            {
+                var sw = Stopwatch.StartNew();
+                BuildLineShapes(floor, input, build, existing, shapes, created);
+                sw.Stop();
+                FpfRefreshLog.LogIfActive("directshape-commit", sw.ElapsedMilliseconds,
+                    "shapes=" + shapes.Count.ToString(CultureInfo.InvariantCulture) +
+                    " segments=" + LastFloorSegments.ToString(CultureInfo.InvariantCulture) +
+                    " commitSplits=" + _commitChunkSplits.ToString(CultureInfo.InvariantCulture) +
+                    " setShapeFails=" + _commitChunkSetShapeFailures.ToString(CultureInfo.InvariantCulture));
+            }
 
             if (shapes.Count == 0 || LastFloorSegments == 0)
             {
@@ -251,7 +288,16 @@ namespace FloorPatternFlattener.Services
                 _report.Heavy.Add(FpfReport.Describe(floor) + ": " + LastFloorSegments.ToString("N0") +
                     " lines in " + shapes.Count + " DirectShape(s) (hatch chunked, edges one per line).");
 
-            var elevReport = GroupShapesAndPlannedElevationNote(floor, shapes, input, out var group, _currentFloorLiftMm);
+            string elevReport;
+            Group group;
+            {
+                var sw = Stopwatch.StartNew();
+                elevReport = GroupShapesAndPlannedElevationNote(floor, shapes, input, out group, _currentFloorLiftMm);
+                sw.Stop();
+                FpfRefreshLog.LogIfActive("group-align", sw.ElapsedMilliseconds,
+                    "groupId=" + (group?.Id.ToString() ?? "none"));
+            }
+
             MirrorLiftParameters(floor, shapes, group, _currentFloorLiftMm);
             try { FpfStorage.WriteFloorLiftMm(floor, _currentFloorLiftMm); }
             catch { /* ignore */ }
@@ -277,12 +323,18 @@ namespace FloorPatternFlattener.Services
 
             if (applyViewGraphics || !wasFlattened || !linksOk)
             {
+                var sw = Stopwatch.StartNew();
                 SyncNativePatterns(floor.Id);
                 HideShapesInSectionViews(shapes);
+                sw.Stop();
+                FpfRefreshLog.LogIfActive("pattern-sync-section-hide", sw.ElapsedMilliseconds, "allViews=true");
             }
             else if (created.Count > 0)
             {
+                var sw = Stopwatch.StartNew();
                 HideShapesInSectionViews(created);
+                sw.Stop();
+                FpfRefreshLog.LogIfActive("section-hide", sw.ElapsedMilliseconds, "newShapesOnly=true");
             }
 
             return true;
@@ -445,6 +497,7 @@ namespace FloorPatternFlattener.Services
             var styleId = _styles.GetLineStyleId(layer);
             if (!TrySetShape(ds, segs, styleId))
             {
+                _commitChunkSetShapeFailures++;
                 if (segs.Count <= 1)
                 {
                     _report.AddWarning(floor, "1 hatch line was rejected by Revit and left out");
@@ -452,6 +505,7 @@ namespace FloorPatternFlattener.Services
                 }
                 var mid = segs.Count / 2;
                 if (mid <= 0) return;
+                _commitChunkSplits++;
                 CommitChunk(floor, segs.GetRange(0, mid), layer, existing, created, shapes, chunkIndex, splitDepth + 1);
                 CommitChunk(floor, segs.GetRange(mid, segs.Count - mid), layer, existing, created, shapes,
                     chunkIndex + 10000, splitDepth + 1);
@@ -584,6 +638,7 @@ namespace FloorPatternFlattener.Services
         internal void SyncNativePatternInActiveViewOnly(ElementId floorId)
         {
             if (_activeView == null || !CanEdit(_activeView.Id)) return;
+            var sw = Stopwatch.StartNew();
             try
             {
                 ViewGraphics.SyncNativeSurfacePattern(_activeView, floorId);
@@ -592,6 +647,10 @@ namespace FloorPatternFlattener.Services
             {
                 _report.ViewFailures++;
             }
+
+            sw.Stop();
+            FpfRefreshLog.LogIfActive("pattern-sync-active-view", sw.ElapsedMilliseconds,
+                "viewId=" + _activeView.Id.ToString());
         }
 
         /// <summary>One DirectShape per boundary run (straight side or tessellated arc span).</summary>
@@ -871,8 +930,12 @@ namespace FloorPatternFlattener.Services
         /// <summary>Hides all generated shapes in all section-like views (used by Refresh).</summary>
         public void HideAllShapesInSectionViews()
         {
+            var sw = Stopwatch.StartNew();
             var shapes = FpfStorage.GetGeneratedDirectShapes(_doc);
             HideShapesInSectionViews(shapes);
+            sw.Stop();
+            FpfRefreshLog.LogIfActive("section-hide-all", sw.ElapsedMilliseconds,
+                "shapes=" + shapes.Count.ToString(CultureInfo.InvariantCulture));
         }
 
         // =============================================================== helpers

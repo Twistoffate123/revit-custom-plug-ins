@@ -26,6 +26,8 @@ namespace FloorPatternFlattener.Updater
     {
         public static readonly Guid UpdaterGuid = new Guid("3E9D6C21-7A4B-4F85-B1D2-8C0E5A7F9B34");
 
+        public static UpdaterId RegisteredUpdaterId { get; private set; }
+
         public static readonly FailureDefinitionId WarningId =
             new FailureDefinitionId(new Guid("9B1F4A7C-2D6E-4C83-A5F0-E7D3B8216C49"));
 
@@ -65,6 +67,7 @@ namespace FloorPatternFlattener.Updater
             if (UpdaterRegistry.IsUpdaterRegistered(id)) return;
 
             UpdaterRegistry.RegisterUpdater(updater, true /* isOptional */);
+            RegisteredUpdaterId = id;
 
             var floors = new ElementClassFilter(typeof(Floor));
             UpdaterRegistry.AddTrigger(id, floors, Element.GetChangeTypeGeometry());
@@ -102,6 +105,12 @@ namespace FloorPatternFlattener.Updater
 
             // Ribbon "Auto: Off": no automatic rebuilds; the Update button brings flat patterns up to date.
             if (!AutoUpdateSetting.Enabled) return;
+
+            if (FlatPatternUpdaterGate.IsSuppressed)
+            {
+                Services.FpfRefreshLog.Current?.UpdaterBlocked();
+                return;
+            }
 
             try
             {
