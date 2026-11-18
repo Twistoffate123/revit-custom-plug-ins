@@ -45,6 +45,13 @@ namespace FloorPatternFlattener.Services
                 return;
             }
 
+            var fileProblem = SharedParameterFileCheck.Problem(File.ReadAllText(fpfPath));
+            if (fileProblem != null)
+            {
+                FpfRefreshLog.LogUpdater("binding failed shared-parameter file: " + fileProblem + " path=" + fpfPath);
+                return;
+            }
+
             var app = doc.Application;
             var originalPath = app.SharedParametersFilename;
             var swapped = false;

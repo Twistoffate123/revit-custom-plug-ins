@@ -214,43 +214,68 @@ namespace FloorPatternFlattener.Storage
         }
 
         /// <summary>
-        /// True when the field was finished with a measurable spec (Length and similar).
-        /// Those fields reject <c>Set/Get</c> unless a <see cref="ForgeTypeId"/> unit is passed.
-        /// <see cref="SpecTypeId.Number"/> is unitless and uses the plain overload.
+        /// Spec token for <see cref="EsFieldCatalog.OverloadFor"/>. Length is the only spec
+        /// that takes a unit, and that unit is internal feet. Number takes none.
+        /// An empty or other measurable spec is skipped so Set cannot throw
+        /// "unitTypeId is not compatible".
         /// </summary>
-        private static bool FieldNeedsUnits(Field field)
+        private static string SpecToken(Field field)
         {
-            if (field == null) return false;
+            if (field == null) return null;
             ForgeTypeId spec;
             try { spec = field.GetSpecTypeId(); }
-            catch { return false; }
-            if (spec == null) return false;
+            catch { return null; }
+            if (spec == null) return null;
             string typeId;
             try { typeId = spec.TypeId; }
-            catch { return false; }
-            if (string.IsNullOrEmpty(typeId)) return false;
-            if (spec.Equals(SpecTypeId.Number)) return false;
-            try { return UnitUtils.IsMeasurableSpec(spec); }
-            catch { return false; }
+            catch { return null; }
+            if (string.IsNullOrEmpty(typeId)) return null;
+            if (spec.Equals(SpecTypeId.Length)) return "Length";
+            if (spec.Equals(SpecTypeId.Number)) return "Number";
+            try
+            {
+                if (!UnitUtils.IsMeasurableSpec(spec)) return "Number";
+            }
+            catch
+            {
+                return null;
+            }
+            return null;
         }
 
-        private static double ReadMillimetres(Entity entity, string fieldName)
+        private static bool TryReadMillimetres(Entity entity, string fieldName, out double millimetres)
         {
+            millimetres = 0;
             var field = entity.Schema.GetField(fieldName);
-            if (field == null) return 0;
-            if (FieldNeedsUnits(field))
-                return entity.Get<double>(field, UnitTypeId.Millimeters);
-            return entity.Get<double>(field);
+            var overload = EsFieldCatalog.OverloadFor(SpecToken(field));
+            if (overload == EsSetOverload.LengthFeet)
+            {
+                millimetres = EsFieldCatalog.FromStoredUnits(overload, entity.Get<double>(field, UnitTypeId.Feet));
+                return true;
+            }
+            if (overload == EsSetOverload.NoUnit)
+            {
+                millimetres = entity.Get<double>(field);
+                return true;
+            }
+            return false;
         }
 
-        private static void WriteMillimetres(Entity entity, string fieldName, double millimetres)
+        private static bool TryWriteMillimetres(Entity entity, string fieldName, double millimetres)
         {
             var field = entity.Schema.GetField(fieldName);
-            if (field == null) return;
-            if (FieldNeedsUnits(field))
-                entity.Set(field, millimetres, UnitTypeId.Millimeters);
-            else
+            var overload = EsFieldCatalog.OverloadFor(SpecToken(field));
+            if (overload == EsSetOverload.LengthFeet)
+            {
+                entity.Set(field, EsFieldCatalog.ToStoredUnits(overload, millimetres), UnitTypeId.Feet);
+                return true;
+            }
+            if (overload == EsSetOverload.NoUnit)
+            {
                 entity.Set(field, millimetres);
+                return true;
+            }
+            return false;
         }
 
         private static SchemaBuilder NewBuilder(Guid guid, string name, string doc)
@@ -501,12 +526,10 @@ namespace FloorPatternFlattener.Storage
         public static void WriteFloorLiftMm(Element floor, double mm)
         {
             if (floor == null) return;
-            // Always the unitless schema. The older LiftMm field may be a length spec;
-            // writing that one without a unit aborts the transaction.
             var e = new Entity(FloorLiftNumberSchema);
             e.Set(FVersion, FpfOptions.SchemaDataVersion);
-            WriteMillimetres(e, FLiftMm, mm);
-            floor.SetEntity(e);
+            if (TryWriteMillimetres(e, FLiftMm, mm))
+                floor.SetEntity(e);
             TryWriteLegacyMillimetres(floor, FloorLiftSchema, FLiftMm, mm);
         }
 
@@ -539,8 +562,10 @@ namespace FloorPatternFlattener.Storage
             ds.SetEntity(e);
             var ex = new Entity(DirectShapeExtraNumberSchema);
             ex.Set(FVersion, FpfOptions.SchemaDataVersion);
-            WriteMillimetres(ex, FExtraLiftMm, data.ExtraLiftMm);
-            ds.SetEntity(ex);
+            // A mismatched unit throws "unitTypeId is not compatible" and the caller
+            // reports that once per chunk. Skip the extra entity instead of guessing.
+            if (TryWriteMillimetres(ex, FExtraLiftMm, data.ExtraLiftMm))
+                ds.SetEntity(ex);
             TryWriteLegacyMillimetres(ds, DirectShapeExtraSchema, FExtraLiftMm, data.ExtraLiftMm);
         }
 
@@ -552,9 +577,8 @@ namespace FloorPatternFlattener.Storage
                 if (schema == null) return null;
                 var entity = element.GetEntity(schema);
                 if (entity == null || !entity.IsValid()) return null;
-                var field = entity.Schema.GetField(fieldName);
-                if (field == null || !CanReadDouble(field)) return null;
-                return ReadMillimetres(entity, fieldName);
+                if (!TryReadMillimetres(entity, fieldName, out var mm)) return null;
+                return mm;
             }
             catch
             {
@@ -563,28 +587,16 @@ namespace FloorPatternFlattener.Storage
         }
 
         /// <summary>
-        /// Writes the legacy schema only when its double field has an explicit spec, so the
-        /// call uses the matching overload and cannot throw "Units are required".
+        /// Writes an already-finished schema only when its live spec matches an overload we can call.
+        /// A length field is written in feet. A number field is written with no unit. Anything else is left untouched.
         /// </summary>
         private static void TryWriteLegacyMillimetres(Element element, Schema schema, string fieldName, double millimetres)
         {
             if (element == null || schema == null || !schema.IsValidObject) return;
-            var field = schema.GetField(fieldName);
-            if (!CanReadDouble(field)) return;
-            var entity = new Entity(schema);
-            entity.Set(FVersion, FpfOptions.SchemaDataVersion);
-            WriteMillimetres(entity, fieldName, millimetres);
-            element.SetEntity(entity);
-        }
-
-        private static bool CanReadDouble(Field field)
-        {
-            if (field == null) return false;
-            if (FieldNeedsUnits(field)) return true;
-            ForgeTypeId spec;
-            try { spec = field.GetSpecTypeId(); }
-            catch { return false; }
-            return spec != null && spec.Equals(SpecTypeId.Number);
+            var probe = new Entity(schema);
+            if (!TryWriteMillimetres(probe, fieldName, millimetres)) return;
+            probe.Set(FVersion, FpfOptions.SchemaDataVersion);
+            element.SetEntity(probe);
         }
 
         // ------------------------------------------------------------ queries
