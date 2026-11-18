@@ -146,7 +146,7 @@ namespace FloorPatternFlattener.Updater
             triggerLog.Append(" deleted=");
             AppendIds(triggerLog, deleted, 12);
 
-            if (IsOutputOnlyChange(doc, allChanged))
+            if (IsOutputOnlyChange(doc, modified.Concat(added).ToList()))
             {
                 FpfRefreshLog.LogUpdater("action=ignore-output-edits " + triggerLog);
                 return;
@@ -308,9 +308,9 @@ namespace FloorPatternFlattener.Updater
             }
         }
 
-        private static bool IsOutputOnlyChange(Document doc, IList<ElementId> changedIds)
+        private static bool IsOutputOnlyChange(Document doc, IEnumerable<ElementId> changedIds)
         {
-            if (changedIds == null || changedIds.Count == 0) return false;
+            if (changedIds == null || !changedIds.Any()) return false;
             foreach (var id in changedIds)
             {
                 var el = doc.GetElement(id);
@@ -326,14 +326,16 @@ namespace FloorPatternFlattener.Updater
             return true;
         }
 
-        private static void AppendIds(StringBuilder sb, IList<ElementId> ids, int max)
+        private static void AppendIds(StringBuilder sb, ICollection<ElementId> ids, int max)
         {
             if (ids == null || ids.Count == 0) { sb.Append('0'); return; }
-            var n = Math.Min(ids.Count, max);
-            for (var i = 0; i < n; i++)
+            var i = 0;
+            foreach (var id in ids)
             {
+                if (i >= max) break;
                 if (i > 0) sb.Append(',');
-                sb.Append(ids[i].ToString());
+                sb.Append(id.ToString());
+                i++;
             }
 
             if (ids.Count > max) sb.Append("+").Append((ids.Count - max).ToString(CultureInfo.InvariantCulture));

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using Autodesk.Revit.DB;
 using FloorPatternFlattener.Storage;
 
@@ -41,9 +42,9 @@ namespace FloorPatternFlattener.Updater
         }
 
         /// <summary>Changed ids are only the floor, its flat-pattern shapes, and their group.</summary>
-        public static bool OnlyOutputHierarchyTouched(Floor floor, Document doc, ICollection<ElementId> changedIds)
+        public static bool OnlyOutputHierarchyTouched(Floor floor, Document doc, IEnumerable<ElementId> changedIds)
         {
-            if (floor == null || changedIds == null || changedIds.Count == 0) return false;
+            if (floor == null || changedIds == null || !changedIds.Any()) return false;
             var allowed = new HashSet<ElementId> { floor.Id };
             var link = FpfStorage.ReadFloor(floor);
             if (link?.DirectShapeUniqueIds != null)
