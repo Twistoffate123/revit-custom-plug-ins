@@ -160,43 +160,20 @@ namespace FloorPatternFlattener.Services
 
             var groupMin = bb.Min.Z;
             var groupMax = bb.Max.Z;
-            const double tolFeet = 0.05;
-            var moved = 0.0;
-
-            if (double.IsFinite(preMin))
+            const double tolFeet = 0.02;
+            var moved = HatchClipPolicy.GroupingShiftCorrection(preMin, groupMin, tolFeet);
+            if (Math.Abs(moved) > 1.0e-12)
             {
-                var groupShift = preMin - groupMin;
-                if (Math.Abs(groupShift) > tolFeet)
-                {
-                    if (TryMoveVertical(doc, group.Id, groupShift))
-                    {
-                        moved += groupShift;
-                        groupMin += groupShift;
-                        groupMax += groupShift;
-                    }
-                }
-            }
-
-            var patternLift = FpfProjectParameters.MmToFeet(Math.Max(FpfOptions.DefaultFloorLiftMm, floorLiftMm));
-            if (patternLift + 1.0e-12 < FpfOptions.PatternAboveTopFeet)
-                patternLift = FpfOptions.PatternAboveTopFeet;
-            if (double.IsFinite(floorTop))
-            {
-                var expectedHatchMin = floorTop + patternLift;
-                var alignDelta = expectedHatchMin - groupMin;
-                if (Math.Abs(alignDelta) > tolFeet)
-                {
-                    if (TryMoveVertical(doc, group.Id, alignDelta))
-                    {
-                        moved += alignDelta;
-                        groupMin += alignDelta;
-                        groupMax += alignDelta;
-                    }
-                }
+                if (!TryMoveVertical(doc, group.Id, moved))
+                    return "floorTop=" + F(floorTop) + " preMin=" + F(preMin) + " groupMin=" + F(groupMin) +
+                           " groupMax=" + F(groupMax) + " moveFailed delta=" + F(moved);
+                groupMin += moved;
+                groupMax += moved;
             }
 
             return "floorTop=" + F(floorTop) + " preMin=" + F(preMin) + " groupMin=" + F(groupMin) +
-                   " groupMax=" + F(groupMax) + " moved=" + F(moved);
+                   " groupMax=" + F(groupMax) + " moved=" + F(moved) +
+                   " liftMm=" + floorLiftMm.ToString("0.##", CultureInfo.InvariantCulture);
         }
 
         private static bool TryMoveVertical(Document doc, ElementId id, double dz)

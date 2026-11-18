@@ -1149,11 +1149,26 @@ namespace FloorPatternFlattener.Geometry
         /// </summary>
         private static void AppendBoundary(FloorHatchInput input, double minLen, FloorHatchResult result)
         {
-            var cleaned = BuildAuthorityClipLoops(input, minLen, out var closed);
-            if (cleaned.Count > 0)
-                ClipHatchToInset(result, cleaned, closed, minLen);
-            var maxSpan = PlanDiagonalFeet(input);
-            EmitAuthorityEdgeLoops(input, minLen, result.Segments, maxSpan);
+            var loops = input.AuthorityBoundaryLoops?.Count ?? 0;
+            var pieces = input.Pieces?.Count ?? 0;
+            if (HatchClipPolicy.ClipHatchToFaceLoops(loops, pieces))
+            {
+                var cleaned = BuildAuthorityClipLoops(input, minLen, out var closed);
+                if (cleaned.Count > 0)
+                    ClipHatchToInset(result, cleaned, closed, minLen);
+                Services.FpfRefreshLog.LogIfActive("boundary-clip-mode", 0,
+                    "mode=face-loops loops=" + loops.ToString(CultureInfo.InvariantCulture));
+            }
+            else
+            {
+                // Hatch is already clipped to each top piece and to openings inside BuildGroup.
+                // Re-clipping thousands of triangle loops with even-odd deletes most of the pattern.
+                Services.FpfRefreshLog.LogIfActive("boundary-clip-mode", 0,
+                    "mode=skip-tessellation-loops loops=" + loops.ToString(CultureInfo.InvariantCulture) +
+                    " pieces=" + pieces.ToString(CultureInfo.InvariantCulture));
+            }
+
+            EmitAuthorityEdgeLoops(input, minLen, result.Segments);
         }
 
         private static List<List<Pt2>> BuildAuthorityClipLoops(FloorHatchInput input, double minLen, out List<bool> closed)
@@ -1511,8 +1526,7 @@ namespace FloorPatternFlattener.Geometry
         }
 
         /// <summary>Only Revit edge-loop segments with silhouette count 1 (drops shared triangulation/internal edges).</summary>
-        private static void EmitAuthorityEdgeLoops(FloorHatchInput input, double minLen, List<Segment3> target,
-            double planDiagonalFeet)
+        private static void EmitAuthorityEdgeLoops(FloorHatchInput input, double minLen, List<Segment3> target)
         {
             var pieces = input.Pieces;
             var weld = FpfOptions.MeshCrackBridgeFeet;
@@ -1528,10 +1542,8 @@ namespace FloorPatternFlattener.Geometry
                 }
             }
 
-            var maxEdge = planDiagonalFeet > 0 ? planDiagonalFeet * 0.98 + minLen : double.PositiveInfinity;
             var cornerRad = 2.0 * Math.PI / 180.0;
             var runId = 0;
-            var skippedSpan = 0;
             foreach (var auth in input.AuthorityBoundaryLoops)
             {
                 if (auth?.Segments == null || auth.Segments.Count == 0) continue;
@@ -1543,12 +1555,6 @@ namespace FloorPatternFlattener.Geometry
                 {
                     var s = auth.Segments[i];
                     if (!counts.TryGetValue(SilhouetteKey(s, weld), out var c) || c != 1) continue;
-                    var len2d = Math.Sqrt((s.X2 - s.X1) * (s.X2 - s.X1) + (s.Y2 - s.Y1) * (s.Y2 - s.Y1));
-                    if (len2d > maxEdge)
-                    {
-                        skippedSpan++;
-                        continue;
-                    }
 
                     if (i > 0 && TurnAngleFromLoop(auth, i) >= cornerRad)
                         sideRun = ++runId;
@@ -1560,11 +1566,6 @@ namespace FloorPatternFlattener.Geometry
                     target.Add(new Segment3 { A = a, B = b, Layer = EdgeLayer, EdgeRun = sideRun });
                 }
             }
-
-            if (skippedSpan > 0)
-                Services.FpfRefreshLog.LogIfActive("edge-span-filter", 0,
-                    "rejected=" + skippedSpan.ToString(CultureInfo.InvariantCulture) +
-                    " max2dFt=" + maxEdge.ToString("0.####", CultureInfo.InvariantCulture));
         }
 
         private static string SilhouetteKey(BoundarySeg s, double weld)

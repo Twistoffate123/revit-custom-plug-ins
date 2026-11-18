@@ -23,6 +23,7 @@ namespace FloorPatternFlattener.Updater
         private static readonly Dictionary<string, WorkItem> _pending = new Dictionary<string, WorkItem>();
         private static readonly object _lock = new object();
         private static bool _idleHooked;
+        private static bool _running;
 
         public static void Bind(UIControlledApplication application)
         {
@@ -54,12 +55,27 @@ namespace FloorPatternFlattener.Updater
 
         private static void OnIdling(object sender, EventArgs e)
         {
+            if (_running) return;
             List<WorkItem> batch;
             lock (_lock)
             {
                 if (_pending.Count == 0) return;
+                _running = true;
                 batch = new List<WorkItem>(_pending.Values);
             }
+
+            try
+            {
+                Drain(batch);
+            }
+            finally
+            {
+                _running = false;
+            }
+        }
+
+        private static void Drain(List<WorkItem> batch)
+        {
 
             foreach (var work in batch)
             {

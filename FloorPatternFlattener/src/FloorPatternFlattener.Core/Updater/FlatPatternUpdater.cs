@@ -65,10 +65,16 @@ namespace FloorPatternFlattener.Updater
 
             var updater = new FlatPatternUpdater(addInId);
             var id = updater.GetUpdaterId();
-            if (UpdaterRegistry.IsUpdaterRegistered(id))
+            // Re-register every startup so an older trigger set (Any-change, DirectShape deletion)
+            // cannot keep rebuilding output when the user edits a pattern group.
+            try
             {
-                if (uiApp != null) FlatPatternUpdaterDeferred.Bind(uiApp);
-                return;
+                if (UpdaterRegistry.IsUpdaterRegistered(id))
+                    UpdaterRegistry.UnregisterUpdater(id);
+            }
+            catch
+            {
+                // in use
             }
 
             UpdaterRegistry.RegisterUpdater(updater, true /* isOptional */);
@@ -76,7 +82,6 @@ namespace FloorPatternFlattener.Updater
 
             var floors = new ElementClassFilter(typeof(Floor));
             UpdaterRegistry.AddTrigger(id, floors, Element.GetChangeTypeGeometry());
-            UpdaterRegistry.AddTrigger(id, floors, Element.GetChangeTypeAny());
             UpdaterRegistry.AddTrigger(id, floors,
                 Element.GetChangeTypeParameter(new ElementId(BuiltInParameter.ELEM_TYPE_PARAM)));
             UpdaterRegistry.AddTrigger(id, floors, Element.GetChangeTypeElementAddition());
@@ -86,7 +91,6 @@ namespace FloorPatternFlattener.Updater
             UpdaterRegistry.AddTrigger(id, new ElementClassFilter(typeof(Material)), Element.GetChangeTypeAny());
             UpdaterRegistry.AddTrigger(id, new ElementClassFilter(typeof(FillPatternElement)), Element.GetChangeTypeAny());
             UpdaterRegistry.AddTrigger(id, new ElementClassFilter(typeof(View)), Element.GetChangeTypeElementAddition());
-            UpdaterRegistry.AddTrigger(id, new ElementClassFilter(typeof(DirectShape)), Element.GetChangeTypeElementDeletion());
 
             if (uiApp != null) FlatPatternUpdaterDeferred.Bind(uiApp);
         }
@@ -109,6 +113,13 @@ namespace FloorPatternFlattener.Updater
             Document doc;
             try { doc = data.GetDocument(); } catch { return; }
             if (doc == null || doc.IsFamilyDocument) return;
+
+            var modified = data.GetModifiedElementIds() ?? new List<ElementId>();
+            var added = data.GetAddedElementIds() ?? new List<ElementId>();
+            var deleted = data.GetDeletedElementIds() ?? new List<ElementId>();
+            FpfRefreshLog.LogUpdater("updater-trigger ids=" + CountIds(modified) + "/" + CountIds(added) +
+                                     " deleted=" + deleted.Count.ToString(CultureInfo.InvariantCulture) +
+                                     " sample=" + FirstIds(modified, added, 8));
 
             if (!AutoUpdateSetting.Enabled)
             {
@@ -188,30 +199,9 @@ namespace FloorPatternFlattener.Updater
             }
 
             if (deleted.Count > 0)
-            {
-                work.ValidateAll = true;
-                foreach (var id in deleted)
-                {
-                    try
-                    {
-                        if (doc.GetElement(id) is DirectShape ds && FpfOutputElements.IsFlattenedDirectShape(ds))
-                        {
-                            var link = FpfStorage.ReadDirectShape(ds);
-                            if (link != null && !string.IsNullOrEmpty(link.SourceFloorUniqueId))
-                            {
-                                if (doc.GetElement(link.SourceFloorUniqueId) is Floor src)
-                                {
-                                    floorsToCheck[src.Id] = src;
-                                    work.FloorIds.Add(src.Id);
-                                }
-                            }
-                        }
-                    }
-                    catch { /* ignore */ }
-                }
-            }
+                FpfRefreshLog.LogUpdater("action=ignore-deletes count=" + deleted.Count.ToString(CultureInfo.InvariantCulture));
 
-            if (work.ChangedTypeIds.Count > 0 || work.ChangedDeps.Count > 0 || work.ValidateAll)
+            if (work.ChangedTypeIds.Count > 0 || work.ChangedDeps.Count > 0)
             {
                 foreach (var f in FpfStorage.GetFlattenedFloors(doc))
                 {
@@ -231,7 +221,7 @@ namespace FloorPatternFlattener.Updater
                 }
             }
 
-            if (work.FloorIds.Count == 0 && work.NewViewIds.Count == 0 && !work.ValidateAll)
+            if (work.FloorIds.Count == 0 && work.NewViewIds.Count == 0)
             {
                 FpfRefreshLog.LogUpdater("action=no-work " + triggerLog);
                 return;
@@ -264,17 +254,6 @@ namespace FloorPatternFlattener.Updater
                     {
                         if (doc.GetElement(fid) is Floor f && f.IsValidObject)
                             svc.Apply(f, ApplyMode.IfChanged, false);
-                    }
-
-                    if (work.ValidateAll)
-                    {
-                        foreach (var f in FpfStorage.GetFlattenedFloors(doc))
-                        {
-                            if (!work.FloorIds.Contains(f.Id))
-                                svc.Apply(f, ApplyMode.ValidateLinks, false);
-                        }
-
-                        svc.CleanupOrphans();
                     }
 
                     if (work.NewViewIds.Count > 0)
@@ -324,6 +303,30 @@ namespace FloorPatternFlattener.Updater
             }
 
             return true;
+        }
+
+        private static string CountIds(ICollection<ElementId> ids) =>
+            (ids?.Count ?? 0).ToString(CultureInfo.InvariantCulture);
+
+        private static string FirstIds(ICollection<ElementId> modified, ICollection<ElementId> added, int max)
+        {
+            var sb = new StringBuilder();
+            var n = 0;
+            void Take(ICollection<ElementId> ids)
+            {
+                if (ids == null) return;
+                foreach (var id in ids)
+                {
+                    if (n >= max) return;
+                    if (n > 0) sb.Append(',');
+                    sb.Append(id.ToString());
+                    n++;
+                }
+            }
+            Take(modified);
+            Take(added);
+            if (n == 0) sb.Append('0');
+            return sb.ToString();
         }
 
         private static void AppendIds(StringBuilder sb, ICollection<ElementId> ids, int max)
