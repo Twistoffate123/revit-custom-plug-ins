@@ -15,13 +15,14 @@ namespace FloorPatternFlattener.Tests
             Assert.NotEmpty(EsFieldCatalog.Fields);
             foreach (var field in EsFieldCatalog.Fields)
             {
-                var overload = EsFieldCatalog.OverloadFor(field.BuiltAs);
-                Assert.NotEqual(EsSetOverload.Skip, overload);
-                Assert.Equal(field.Overload, overload);
+                var choice = EsFieldCatalog.Choose(field.BuiltAs == "Number" || field.BuiltAs == "Length", false, field.BuiltAs);
+                Assert.Equal(field.Choice, choice);
                 if (field.BuiltAs == "Length")
-                    Assert.Equal(EsSetOverload.LengthFeet, overload);
+                    Assert.Equal(EsUnitChoice.Feet, choice);
+                else if (field.BuiltAs == "Number")
+                    Assert.Equal(EsUnitChoice.General, choice);
                 else
-                    Assert.Equal(EsSetOverload.NoUnit, overload);
+                    Assert.Equal(EsUnitChoice.NoUnit, choice);
             }
         }
 
@@ -30,25 +31,26 @@ namespace FloorPatternFlattener.Tests
         {
             var link = EsFieldCatalog.Fields.Where(f => f.SchemaName == "FPF_FlatPatternShape").ToList();
             Assert.Equal(new[] { "Version", "SourceFloorUniqueId", "ChunkIndex" }, link.Select(f => f.FieldName));
-            Assert.All(link, f => Assert.Equal(EsSetOverload.NoUnit, f.Overload));
+            Assert.All(link, f => Assert.Equal(EsUnitChoice.NoUnit, f.Choice));
         }
 
         [Fact]
-        public void LengthUsesFeetAndNumberDoesNot()
+        public void StoredLengthUsesFeetAndStoredNumberUsesGeneral()
         {
-            Assert.Equal(EsSetOverload.LengthFeet, EsFieldCatalog.OverloadFor("Length"));
-            Assert.Equal(EsSetOverload.NoUnit, EsFieldCatalog.OverloadFor("Number"));
-            Assert.Equal(EsSetOverload.NoUnit, EsFieldCatalog.OverloadFor("String"));
-            Assert.Equal(EsSetOverload.NoUnit, EsFieldCatalog.OverloadFor("Int"));
-            Assert.Equal(EsSetOverload.NoUnit, EsFieldCatalog.OverloadFor("ElementId"));
-            Assert.Equal(EsSetOverload.NoUnit, EsFieldCatalog.OverloadFor("Guid"));
-            Assert.Equal(EsSetOverload.Skip, EsFieldCatalog.OverloadFor(""));
-            Assert.Equal(EsSetOverload.Skip, EsFieldCatalog.OverloadFor("Millimeters"));
+            var length = EsFieldCatalog.Choose(isDouble: true, specEmpty: false, specToken: "Length");
+            var number = EsFieldCatalog.Choose(isDouble: true, specEmpty: false, specToken: "Number");
+            Assert.Equal(EsUnitChoice.Feet, length);
+            Assert.Equal(EsUnitChoice.General, number);
+            Assert.Equal(1.0, EsFieldCatalog.ToStoredUnits(length, 304.8), 9);
+            Assert.Equal(50.0, EsFieldCatalog.ToStoredUnits(number, 50), 9);
+            Assert.Equal(50.0, EsFieldCatalog.FromStoredUnits(length, EsFieldCatalog.ToStoredUnits(length, 50)), 6);
+            Assert.Equal(50.0, EsFieldCatalog.FromStoredUnits(number, 50), 9);
 
-            Assert.Equal(1.0, EsFieldCatalog.ToStoredUnits(EsSetOverload.LengthFeet, 304.8), 9);
-            Assert.Equal(50.0, EsFieldCatalog.ToStoredUnits(EsSetOverload.NoUnit, 50), 9);
-            Assert.Equal(50.0, EsFieldCatalog.FromStoredUnits(EsSetOverload.LengthFeet,
-                EsFieldCatalog.ToStoredUnits(EsSetOverload.LengthFeet, 50)), 6);
+            Assert.Equal(EsUnitChoice.NoUnit, EsFieldCatalog.Choose(true, true, "Length"));
+            Assert.Equal(EsUnitChoice.NoUnit, EsFieldCatalog.Choose(false, false, "Length"));
+            Assert.Equal(EsUnitChoice.NoUnit, EsFieldCatalog.Choose(false, false, "Int"));
+            Assert.Equal(EsUnitChoice.NoUnit, EsFieldCatalog.Choose(false, false, "String"));
+            Assert.Equal(EsUnitChoice.FirstValid, EsFieldCatalog.Choose(true, false, "Area"));
         }
 
         [Fact]

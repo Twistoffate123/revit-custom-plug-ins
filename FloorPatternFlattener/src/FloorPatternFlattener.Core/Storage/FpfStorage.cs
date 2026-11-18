@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.DB.ExtensibleStorage;
+using FloorPatternFlattener.Services;
 
 namespace FloorPatternFlattener.Storage
 {
@@ -213,69 +215,288 @@ namespace FloorPatternFlattener.Storage
             }
         }
 
-        /// <summary>
-        /// Spec token for <see cref="EsFieldCatalog.OverloadFor"/>. Length is the only spec
-        /// that takes a unit, and that unit is internal feet. Number takes none.
-        /// An empty or other measurable spec is skipped so Set cannot throw
-        /// "unitTypeId is not compatible".
-        /// </summary>
-        private static string SpecToken(Field field)
+        private static readonly HashSet<string> LoggedSchemaKeys = new HashSet<string>();
+
+        /// <summary>Called when a Flatten/Refresh session starts so the next write logs the live schema again.</summary>
+        public static void ResetSchemaLog()
         {
-            if (field == null) return null;
-            ForgeTypeId spec;
-            try { spec = field.GetSpecTypeId(); }
+            lock (Gate) LoggedSchemaKeys.Clear();
+        }
+
+        private static Field FindField(Schema schema, string fieldName)
+        {
+            if (schema == null || string.IsNullOrEmpty(fieldName)) return null;
+            try { return schema.GetField(fieldName); }
             catch { return null; }
+        }
+
+        private static void LogSchemaOnce(Schema schema)
+        {
+            if (schema == null || !schema.IsValidObject) return;
+            var key = FpfRefreshLog.SessionSerial.ToString() + "|" + schema.GUID;
+            lock (Gate)
+            {
+                if (!LoggedSchemaKeys.Add(key)) return;
+            }
+
+            var sb = new StringBuilder();
+            sb.Append("guid=").Append(schema.GUID.ToString());
+            try { sb.Append(" name=").Append(schema.SchemaName); } catch { /* ignore */ }
+            IList<Field> fields = null;
+            try { fields = schema.ListFields(); } catch { fields = null; }
+            if (fields != null)
+            {
+                foreach (var field in fields)
+                {
+                    if (field == null) continue;
+                    sb.Append(" | field=").Append(field.FieldName);
+                    try { sb.Append(" type=").Append(field.ValueType != null ? field.ValueType.FullName : "?"); }
+                    catch { sb.Append(" type=?"); }
+                    try
+                    {
+                        var spec = field.GetSpecTypeId();
+                        var id = spec == null ? null : spec.TypeId;
+                        sb.Append(" spec=").Append(string.IsNullOrEmpty(id) ? "(empty)" : id);
+                    }
+                    catch (Exception ex)
+                    {
+                        sb.Append(" spec-error=").Append(OneLine(ex));
+                    }
+                    try
+                    {
+                        var choice = Classify(field, out var unit);
+                        sb.Append(" choice=").Append(choice.ToString());
+                        var unitId = "";
+                        try { unitId = unit == null ? "" : unit.TypeId; } catch { unitId = ""; }
+                        sb.Append(" unit=").Append(string.IsNullOrEmpty(unitId) ? "(none)" : unitId);
+                    }
+                    catch (Exception ex)
+                    {
+                        sb.Append(" choice-error=").Append(OneLine(ex));
+                    }
+                }
+            }
+            FpfRefreshLog.LogPhaseAlways("link-schema", sb.ToString());
+        }
+
+        private static void LogFieldFailure(Schema schema, string fieldName, Exception ex)
+        {
+            var key = FpfRefreshLog.SessionSerial.ToString() + "|err|" +
+                      (schema != null ? schema.GUID.ToString() : "?") + "|" + (fieldName ?? "?");
+            lock (Gate)
+            {
+                if (!LoggedSchemaKeys.Add(key)) return;
+            }
+            FpfRefreshLog.LogPhaseAlways("link-schema",
+                "guid=" + (schema != null ? schema.GUID.ToString() : "?") +
+                " field=" + (fieldName ?? "?") +
+                " error=" + OneLine(ex));
+        }
+
+        private static string OneLine(Exception ex)
+        {
+            if (ex == null) return "";
+            return ex.ToString().Replace("\r", " ").Replace("\n", " | ");
+        }
+
+        /// <summary>
+        /// Inspects the field that is already stored for this schema GUID.
+        /// Empty spec or a non-double uses no unit. Length uses feet. Number uses general.
+        /// Any other spec uses the first unit <c>GetValidUnits</c> reports, and only if
+        /// <c>Field.CompatibleUnit</c> accepts it.
+        /// </summary>
+        private static EsUnitChoice Classify(Field field, out ForgeTypeId unit)
+        {
+            unit = null;
+            if (field == null) return EsUnitChoice.NoUnit;
+            var isDouble = false;
+            try { isDouble = field.ValueType == typeof(double); } catch { /* ignore */ }
+
+            ForgeTypeId spec = null;
+            try { spec = field.GetSpecTypeId(); } catch { spec = null; }
+            var typeId = "";
+            try { typeId = spec == null ? "" : (spec.TypeId ?? ""); } catch { typeId = ""; }
+            var empty = spec == null || string.IsNullOrEmpty(typeId);
+            var token = "";
+            if (!empty)
+            {
+                try
+                {
+                    if (spec.Equals(SpecTypeId.Length)) token = "Length";
+                    else if (spec.Equals(SpecTypeId.Number)) token = "Number";
+                }
+                catch { /* compare the type id text below */ }
+                if (token.Length == 0)
+                {
+                    if (typeId.IndexOf(":length", StringComparison.OrdinalIgnoreCase) >= 0)
+                        token = "Length";
+                    else if (typeId.IndexOf(":number", StringComparison.OrdinalIgnoreCase) >= 0)
+                        token = "Number";
+                    else
+                        token = "Other";
+                }
+            }
+
+            var choice = EsFieldCatalog.Choose(isDouble, empty, token);
+            if (choice == EsUnitChoice.NoUnit) return choice;
+
+            if (choice == EsUnitChoice.Feet) unit = UnitTypeId.Feet;
+            else if (choice == EsUnitChoice.General) unit = UnitTypeId.General;
+            else unit = FirstValidUnit(spec);
+
+            if (unit != null && !Compatible(field, unit))
+            {
+                var fallback = FirstValidUnit(spec);
+                if (fallback != null && Compatible(field, fallback))
+                {
+                    unit = fallback;
+                    choice = EsUnitChoice.FirstValid;
+                }
+                else
+                {
+                    unit = null;
+                    choice = EsUnitChoice.NoUnit;
+                }
+            }
+            return choice;
+        }
+
+        private static bool Compatible(Field field, ForgeTypeId unit)
+        {
+            if (field == null || unit == null) return false;
+            try { return field.CompatibleUnit(unit); }
+            catch { return false; }
+        }
+
+        private static ForgeTypeId FirstValidUnit(ForgeTypeId spec)
+        {
             if (spec == null) return null;
-            string typeId;
-            try { typeId = spec.TypeId; }
-            catch { return null; }
-            if (string.IsNullOrEmpty(typeId)) return null;
-            if (spec.Equals(SpecTypeId.Length)) return "Length";
-            if (spec.Equals(SpecTypeId.Number)) return "Number";
             try
             {
-                if (!UnitUtils.IsMeasurableSpec(spec)) return "Number";
+                var units = UnitUtils.GetValidUnits(spec);
+                if (units == null) return null;
+                foreach (var unit in units)
+                    if (unit != null) return unit;
             }
-            catch
-            {
-                return null;
-            }
+            catch { /* spec is not measurable */ }
             return null;
+        }
+
+        private static double MillimetresToUnit(double millimetres, EsUnitChoice choice, ForgeTypeId unit)
+        {
+            if (choice == EsUnitChoice.Feet || (unit != null && unit.Equals(UnitTypeId.Feet)))
+                return EsFieldCatalog.ToStoredUnits(EsUnitChoice.Feet, millimetres);
+            if (choice == EsUnitChoice.NoUnit || choice == EsUnitChoice.General || unit == null
+                || unit.Equals(UnitTypeId.General))
+                return millimetres;
+            try { return UnitUtils.Convert(millimetres, UnitTypeId.Millimeters, unit); }
+            catch { return millimetres; }
+        }
+
+        private static double UnitToMillimetres(double stored, EsUnitChoice choice, ForgeTypeId unit)
+        {
+            if (choice == EsUnitChoice.Feet || (unit != null && unit.Equals(UnitTypeId.Feet)))
+                return EsFieldCatalog.FromStoredUnits(EsUnitChoice.Feet, stored);
+            if (choice == EsUnitChoice.NoUnit || choice == EsUnitChoice.General || unit == null
+                || unit.Equals(UnitTypeId.General))
+                return stored;
+            try { return UnitUtils.Convert(stored, unit, UnitTypeId.Millimeters); }
+            catch { return stored; }
+        }
+
+        private static void SetValue(Entity entity, string fieldName, object value)
+        {
+            if (entity == null || !entity.IsValid()) return;
+            LogSchemaOnce(entity.Schema);
+            var field = FindField(entity.Schema, fieldName);
+            if (field == null) return;
+            try
+            {
+                var type = field.ValueType;
+                if (type == typeof(double))
+                {
+                    var number = value is double d ? d : Convert.ToDouble(value);
+                    WriteDouble(entity, field, number, asMillimetres: false);
+                    return;
+                }
+                if (type == typeof(int))
+                {
+                    entity.Set(field, Convert.ToInt32(value));
+                    return;
+                }
+                if (type == typeof(bool))
+                {
+                    entity.Set(field, Convert.ToBoolean(value));
+                    return;
+                }
+                if (type == typeof(string))
+                {
+                    entity.Set(field, value as string ?? string.Empty);
+                    return;
+                }
+                if (value is IList<string> strings)
+                {
+                    entity.Set<IList<string>>(field, strings);
+                    return;
+                }
+                LogFieldFailure(entity.Schema, fieldName,
+                    new InvalidOperationException("skipped unsupported type " + (type == null ? "?" : type.FullName)));
+            }
+            catch (Exception ex)
+            {
+                LogFieldFailure(entity.Schema, field.FieldName, ex);
+            }
+        }
+
+        private static bool WriteDouble(Entity entity, Field field, double amount, bool asMillimetres)
+        {
+            var choice = Classify(field, out var unit);
+            var stored = asMillimetres ? MillimetresToUnit(amount, choice, unit) : amount;
+            try
+            {
+                if (choice == EsUnitChoice.NoUnit || unit == null)
+                    entity.Set(field, stored);
+                else
+                    entity.Set(field, stored, unit);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                LogFieldFailure(entity.Schema, field.FieldName, ex);
+                return false;
+            }
         }
 
         private static bool TryReadMillimetres(Entity entity, string fieldName, out double millimetres)
         {
             millimetres = 0;
-            var field = entity.Schema.GetField(fieldName);
-            var overload = EsFieldCatalog.OverloadFor(SpecToken(field));
-            if (overload == EsSetOverload.LengthFeet)
+            var field = FindField(entity.Schema, fieldName);
+            if (field == null) return false;
+            try
             {
-                millimetres = EsFieldCatalog.FromStoredUnits(overload, entity.Get<double>(field, UnitTypeId.Feet));
+                if (field.ValueType != typeof(double)) return false;
+                var choice = Classify(field, out var unit);
+                double stored;
+                if (choice == EsUnitChoice.NoUnit || unit == null)
+                    stored = entity.Get<double>(field);
+                else
+                    stored = entity.Get<double>(field, unit);
+                millimetres = UnitToMillimetres(stored, choice, unit);
                 return true;
             }
-            if (overload == EsSetOverload.NoUnit)
+            catch (Exception ex)
             {
-                millimetres = entity.Get<double>(field);
-                return true;
+                LogFieldFailure(entity.Schema, fieldName, ex);
+                return false;
             }
-            return false;
         }
 
         private static bool TryWriteMillimetres(Entity entity, string fieldName, double millimetres)
         {
-            var field = entity.Schema.GetField(fieldName);
-            var overload = EsFieldCatalog.OverloadFor(SpecToken(field));
-            if (overload == EsSetOverload.LengthFeet)
-            {
-                entity.Set(field, EsFieldCatalog.ToStoredUnits(overload, millimetres), UnitTypeId.Feet);
-                return true;
-            }
-            if (overload == EsSetOverload.NoUnit)
-            {
-                entity.Set(field, millimetres);
-                return true;
-            }
-            return false;
+            LogSchemaOnce(entity.Schema);
+            var field = FindField(entity.Schema, fieldName);
+            if (field == null) return false;
+            return WriteDouble(entity, field, millimetres, asMillimetres: true);
         }
 
         private static SchemaBuilder NewBuilder(Guid guid, string name, string doc)
@@ -526,11 +747,8 @@ namespace FloorPatternFlattener.Storage
         public static void WriteFloorLiftMm(Element floor, double mm)
         {
             if (floor == null) return;
-            var e = new Entity(FloorLiftNumberSchema);
-            e.Set(FVersion, FpfOptions.SchemaDataVersion);
-            if (TryWriteMillimetres(e, FLiftMm, mm))
-                floor.SetEntity(e);
-            TryWriteLegacyMillimetres(floor, FloorLiftSchema, FLiftMm, mm);
+            WriteMillimetreEntity(floor, FloorLiftNumberSchema, FLiftMm, mm);
+            WriteMillimetreEntity(floor, FloorLiftSchema, FLiftMm, mm);
         }
 
         // ------------------------------------------------------------ direct shape
@@ -555,18 +773,41 @@ namespace FloorPatternFlattener.Storage
 
         public static void WriteDirectShape(Element ds, DirectShapeLinkData data)
         {
-            var e = new Entity(DirectShapeSchema);
-            e.Set(FVersion, FpfOptions.SchemaDataVersion);
-            e.Set(FSource, data.SourceFloorUniqueId ?? string.Empty);
-            e.Set(FChunk, data.ChunkIndex);
-            ds.SetEntity(e);
-            var ex = new Entity(DirectShapeExtraNumberSchema);
-            ex.Set(FVersion, FpfOptions.SchemaDataVersion);
-            // A mismatched unit throws "unitTypeId is not compatible" and the caller
-            // reports that once per chunk. Skip the extra entity instead of guessing.
-            if (TryWriteMillimetres(ex, FExtraLiftMm, data.ExtraLiftMm))
-                ds.SetEntity(ex);
-            TryWriteLegacyMillimetres(ds, DirectShapeExtraSchema, FExtraLiftMm, data.ExtraLiftMm);
+            if (ds == null || data == null) return;
+            try
+            {
+                var e = new Entity(DirectShapeSchema);
+                SetValue(e, FVersion, FpfOptions.SchemaDataVersion);
+                SetValue(e, FSource, data.SourceFloorUniqueId ?? string.Empty);
+                SetValue(e, FChunk, data.ChunkIndex);
+                ds.SetEntity(e);
+            }
+            catch (Exception ex)
+            {
+                LogFieldFailure(DirectShapeSchema, FSource, ex);
+            }
+            WriteMillimetreEntity(ds, DirectShapeExtraNumberSchema, FExtraLiftMm, data.ExtraLiftMm);
+            WriteMillimetreEntity(ds, DirectShapeExtraSchema, FExtraLiftMm, data.ExtraLiftMm);
+        }
+
+        /// <summary>
+        /// Writes one millimetre field onto a schema that may already exist with a different spec.
+        /// A missing field is skipped. A unit mismatch is logged once and does not fail the chunk.
+        /// </summary>
+        private static void WriteMillimetreEntity(Element element, Schema schema, string fieldName, double millimetres)
+        {
+            if (element == null || schema == null || !schema.IsValidObject) return;
+            try
+            {
+                var entity = new Entity(schema);
+                SetValue(entity, FVersion, FpfOptions.SchemaDataVersion);
+                if (!TryWriteMillimetres(entity, fieldName, millimetres)) return;
+                element.SetEntity(entity);
+            }
+            catch (Exception ex)
+            {
+                LogFieldFailure(schema, fieldName, ex);
+            }
         }
 
         private static double? ReadMillimetresFrom(Element element, Guid schemaGuid, string fieldName)
@@ -584,19 +825,6 @@ namespace FloorPatternFlattener.Storage
             {
                 return null;
             }
-        }
-
-        /// <summary>
-        /// Writes an already-finished schema only when its live spec matches an overload we can call.
-        /// A length field is written in feet. A number field is written with no unit. Anything else is left untouched.
-        /// </summary>
-        private static void TryWriteLegacyMillimetres(Element element, Schema schema, string fieldName, double millimetres)
-        {
-            if (element == null || schema == null || !schema.IsValidObject) return;
-            var probe = new Entity(schema);
-            if (!TryWriteMillimetres(probe, fieldName, millimetres)) return;
-            probe.Set(FVersion, FpfOptions.SchemaDataVersion);
-            element.SetEntity(probe);
         }
 
         // ------------------------------------------------------------ queries

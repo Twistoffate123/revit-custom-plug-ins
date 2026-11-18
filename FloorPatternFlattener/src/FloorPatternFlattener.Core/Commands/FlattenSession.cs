@@ -40,14 +40,17 @@ namespace FloorPatternFlattener.Commands
 
         public Result Run()
         {
-            try
+            using (FpfRefreshLog.BeginSession(string.IsNullOrEmpty(_state.Title) ? "Flatten Floor Patterns" : _state.Title))
             {
-                return Loop();
-            }
-            finally
-            {
-                // Anything still open (exception, Revit closing the command) is rolled back: nothing half-applied.
-                RollBackPreview();
+                try
+                {
+                    return Loop();
+                }
+                finally
+                {
+                    // Anything still open (exception, Revit closing the command) is rolled back: nothing half-applied.
+                    RollBackPreview();
+                }
             }
         }
 

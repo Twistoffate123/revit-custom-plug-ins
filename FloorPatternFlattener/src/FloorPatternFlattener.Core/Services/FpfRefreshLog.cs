@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using Autodesk.Revit.DB;
+using FloorPatternFlattener.Storage;
 
 namespace FloorPatternFlattener.Services
 {
@@ -13,6 +14,9 @@ namespace FloorPatternFlattener.Services
         private static readonly object FileLock = new object();
 
         public static FpfRefreshLog Current { get; private set; }
+
+        /// <summary>Increments on every session so schema diagnostics log once per session, not once per chunk.</summary>
+        public static int SessionSerial { get; private set; }
 
         private readonly StreamWriter _writer;
         private readonly Stopwatch _session = Stopwatch.StartNew();
@@ -42,9 +46,22 @@ namespace FloorPatternFlattener.Services
         public static IDisposable BeginSession(string name)
         {
             Current?.Dispose();
+            SessionSerial++;
+            FpfStorage.ResetSchemaLog();
             var log = new FpfRefreshLog(name ?? "Refresh");
             Current = log;
             return log;
+        }
+
+        /// <summary>Phase line inside a session, or a flushed updater line when Flatten has not opened one.</summary>
+        public static void LogPhaseAlways(string phase, string detail)
+        {
+            if (Current != null)
+            {
+                Current.Phase(phase, 0, detail);
+                return;
+            }
+            LogUpdater("phase=" + (phase ?? "log") + " " + (detail ?? ""));
         }
 
         public void BeginFloor(Floor floor)

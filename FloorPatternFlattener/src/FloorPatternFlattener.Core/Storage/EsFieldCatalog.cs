@@ -4,19 +4,19 @@ using System.Collections.Generic;
 namespace FloorPatternFlattener.Storage
 {
     /// <summary>
-    /// Which <c>Entity.Set</c> / <c>Get</c> overload a schema field uses.
-    /// Length is stored in Revit internal feet and must be passed with <c>UnitTypeId.Feet</c>.
-    /// Number, and every non-numeric field, uses the overload that takes no unit.
-    /// Millimetres are never passed as a unit: a length field rejects them.
+    /// How to call <c>Entity.Set</c> / <c>Get</c> for a field whose spec was already finished in the model.
+    /// The unit is chosen from that spec. It is never assumed.
     /// </summary>
-    public enum EsSetOverload
+    public enum EsUnitChoice
     {
-        /// <summary>Do not call Set/Get. The live spec is not one we can write without throwing.</summary>
-        Skip = 0,
-        /// <summary>Set/Get without a <c>ForgeTypeId</c>.</summary>
-        NoUnit = 1,
-        /// <summary>Set/Get of a length, value in feet, unit <c>UnitTypeId.Feet</c>.</summary>
-        LengthFeet = 2
+        /// <summary>Empty spec, or the value is not a double. Set/Get with no unit.</summary>
+        NoUnit = 0,
+        /// <summary>Spec is Length. Pass <c>UnitTypeId.Feet</c> and store internal feet.</summary>
+        Feet = 1,
+        /// <summary>Spec is Number. Pass <c>UnitTypeId.General</c>. The number is millimetres.</summary>
+        General = 2,
+        /// <summary>Any other measurable spec. Pass the first unit from <c>UnitUtils.GetValidUnits</c>.</summary>
+        FirstValid = 3
     }
 
     public sealed class EsField
@@ -34,7 +34,7 @@ namespace FloorPatternFlattener.Storage
         public string FieldName { get; }
         /// <summary>Spec the builder uses when this GUID is first finished: Int, Bool, String, StringList, Number, Length.</summary>
         public string BuiltAs { get; }
-        public EsSetOverload Overload => EsFieldCatalog.OverloadFor(BuiltAs);
+        public EsUnitChoice Choice => EsFieldCatalog.Choose(BuiltAs == "Number" || BuiltAs == "Length", BuiltAs != "Number" && BuiltAs != "Length" && string.IsNullOrEmpty(BuiltAs), BuiltAs);
     }
 
     /// <summary>Every extensible-storage field this add-in finishes, and the Set overload it requires.</summary>
@@ -74,36 +74,42 @@ namespace FloorPatternFlattener.Storage
         };
 
         /// <summary>
-        /// Live spec from <c>Field.GetSpecTypeId</c>, named the way the builder calls it:
-        /// Length, Number, Int, Bool, String, StringList, ElementId, Guid.
-        /// Empty or unrecognised measurable specs return <see cref="EsSetOverload.Skip"/>.
+        /// Picks the Set/Get overload from a field inspected at runtime.
+        /// <paramref name="specToken"/> is Length, Number, or any other spec name.
+        /// An empty spec or a non-double value uses no unit. Length uses feet.
+        /// Number uses general. Anything else asks the document for a valid unit.
         /// </summary>
-        public static EsSetOverload OverloadFor(string specToken)
+        public static EsUnitChoice Choose(bool isDouble, bool specEmpty, string specToken)
         {
-            if (string.IsNullOrEmpty(specToken)) return EsSetOverload.Skip;
+            if (!isDouble || specEmpty || string.IsNullOrEmpty(specToken)) return EsUnitChoice.NoUnit;
             if (string.Equals(specToken, "Length", StringComparison.OrdinalIgnoreCase))
-                return EsSetOverload.LengthFeet;
-            if (string.Equals(specToken, "Number", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(specToken, "Int", StringComparison.OrdinalIgnoreCase)
+                return EsUnitChoice.Feet;
+            if (string.Equals(specToken, "Number", StringComparison.OrdinalIgnoreCase))
+                return EsUnitChoice.General;
+            if (string.Equals(specToken, "Int", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(specToken, "Bool", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(specToken, "String", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(specToken, "StringList", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(specToken, "ElementId", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(specToken, "Guid", StringComparison.OrdinalIgnoreCase))
-                return EsSetOverload.NoUnit;
-            return EsSetOverload.Skip;
+                return EsUnitChoice.NoUnit;
+            return EsUnitChoice.FirstValid;
         }
 
-        /// <summary>Value passed to Set. Length fields store internal feet. Number fields store the millimetre count.</summary>
-        public static double ToStoredUnits(EsSetOverload overload, double millimetres)
+        /// <summary>
+        /// Quantity written for a millimetre value. Feet stores internal feet.
+        /// General and no-unit store the millimetre count. FirstValid is converted by the caller
+        /// once the live unit is known.
+        /// </summary>
+        public static double ToStoredUnits(EsUnitChoice choice, double millimetres)
         {
-            if (overload == EsSetOverload.LengthFeet) return millimetres / MillimetresPerFoot;
+            if (choice == EsUnitChoice.Feet) return millimetres / MillimetresPerFoot;
             return millimetres;
         }
 
-        public static double FromStoredUnits(EsSetOverload overload, double stored)
+        public static double FromStoredUnits(EsUnitChoice choice, double stored)
         {
-            if (overload == EsSetOverload.LengthFeet) return stored * MillimetresPerFoot;
+            if (choice == EsUnitChoice.Feet) return stored * MillimetresPerFoot;
             return stored;
         }
 
