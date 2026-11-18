@@ -59,6 +59,15 @@ namespace FloorPatternFlattener.Commands
             return id => !denied.Contains(id) && Editability.CanEdit(doc, id);
         }
 
+        /// <summary>Checkout for an arbitrary element list (e.g. Lift Selected on DirectShapes).</summary>
+        public static Func<ElementId, bool> PrepareEditability(Document doc, IEnumerable<Element> elements)
+        {
+            var ids = elements?.Where(e => e != null && e.IsValidObject).Select(e => e.Id).Distinct().ToList()
+                      ?? new List<ElementId>();
+            var denied = Editability.AcquireOrGetDenied(doc, ids);
+            return id => !denied.Contains(id) && Editability.CanEdit(doc, id);
+        }
+
         /// <summary>Runs <paramref name="body"/> in one named, undoable transaction.</summary>
         public static bool RunTransaction(Document doc, string name, FpfReport report, Action body)
         {

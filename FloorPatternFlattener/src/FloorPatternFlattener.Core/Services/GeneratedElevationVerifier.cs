@@ -64,7 +64,8 @@ namespace FloorPatternFlattener.Services
             return double.IsNegativeInfinity(best) ? double.NaN : best;
         }
 
-        public static Sample Measure(Document doc, IEnumerable<DirectShape> shapes, FloorHatchInput input, string phase)
+        public static Sample Measure(Document doc, IEnumerable<DirectShape> shapes, FloorHatchInput input, string phase,
+            double requiredLiftMm = 0)
         {
             var s = new Sample { Phase = phase };
             if (doc == null || shapes == null || input == null) return s;
@@ -81,7 +82,8 @@ namespace FloorPatternFlattener.Services
                     if (!double.IsFinite(top)) continue;
                     if (top < s.FloorTopMinFt) s.FloorTopMinFt = top;
                     if (top > s.FloorTopMaxFt) s.FloorTopMaxFt = top;
-                    var need = top + FpfOptions.VerifiedClearanceAboveTopFeet;
+                    var need = top + FpfOptions.VerifiedClearanceAboveTopFeet +
+                               FpfProjectParameters.MmToFeet(Math.Max(0, requiredLiftMm));
                     if (pt.Z + 1.0e-9 < need)
                     {
                         s.BelowTop++;
@@ -97,7 +99,8 @@ namespace FloorPatternFlattener.Services
             return s;
         }
 
-        public static int CorrectBelowTop(Document doc, IList<DirectShape> shapes, FloorHatchInput input, out int endpoints)
+        public static int CorrectBelowTop(Document doc, IList<DirectShape> shapes, FloorHatchInput input, out int endpoints,
+            double requiredLiftMm = 0)
         {
             endpoints = 0;
             if (doc == null || shapes == null || shapes.Count == 0) return 0;
@@ -112,7 +115,8 @@ namespace FloorPatternFlattener.Services
                 {
                     var top = SampleTopZ(input, pt.X, pt.Y);
                     if (!double.IsFinite(top)) continue;
-                    var need = top + FpfOptions.VerifiedClearanceAboveTopFeet;
+                    var need = top + FpfOptions.VerifiedClearanceAboveTopFeet +
+                               FpfProjectParameters.MmToFeet(Math.Max(0, requiredLiftMm));
                     var deficit = need - pt.Z;
                     if (deficit > maxDeficit) maxDeficit = deficit;
                 }

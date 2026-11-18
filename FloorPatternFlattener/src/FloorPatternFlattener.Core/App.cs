@@ -24,6 +24,15 @@ namespace FloorPatternFlattener
 
             try
             {
+                FpfProjectParameters.ConfigureSharedParameterFile(application.ControlledApplication);
+            }
+            catch
+            {
+                // shared parameters file optional until copied beside the DLL
+            }
+
+            try
+            {
                 RibbonBuilder.Build(application);
             }
             catch (Exception ex)

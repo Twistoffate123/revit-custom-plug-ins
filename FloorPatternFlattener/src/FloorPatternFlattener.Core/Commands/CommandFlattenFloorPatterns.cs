@@ -53,6 +53,7 @@ namespace FloorPatternFlattener.Commands
                     Placement = PatternPlacement.Identity,
                     HideLive = LastHideLiveSetting.Load(),
                     HideLiveInActiveView = LastHideLiveInActiveViewSetting.Load(),
+                    FloorLiftMm = LastFloorLiftSetting.Load(),
                     Info = floors.Count + " floor(s) selected. With angle 0 and no anchor the flat pattern matches the " +
                            "live floor pattern exactly. Already flattened floors are replaced. Use Edit to change one " +
                            "keeping its stored settings."
@@ -107,6 +108,8 @@ namespace FloorPatternFlattener.Commands
                     Style = FpfStorage.ReadStyle(first),
                     Placement = FpfStorage.ReadPlacement(first),
                     HideLive = FpfStorage.ReadHideLive(first),
+                    HideLiveInActiveView = LastHideLiveInActiveViewSetting.Load(),
+                    FloorLiftMm = FlatPatternService.GetFloorLiftMmForDisplay(first),
                     Info = (floors.Count == 1 ? FpfReport.Describe(first) : floors.Count + " flattened floors (settings of " +
                                FpfReport.Describe(first) + " loaded)") +
                            ". Change the angle, alignment or live-floor hiding, Preview, then Apply to replace it - " +

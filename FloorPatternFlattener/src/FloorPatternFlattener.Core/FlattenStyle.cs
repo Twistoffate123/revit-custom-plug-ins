@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.IO;
 
 namespace FloorPatternFlattener
@@ -54,6 +55,35 @@ namespace FloorPatternFlattener
             {
                 // not critical
             }
+        }
+    }
+
+    /// <summary>Remembers default FPF Lift (mm) for new Flatten runs.</summary>
+    internal static class LastFloorLiftSetting
+    {
+        private static string FilePath => Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "FloorPatternFlattener", "floor-lift-mm.txt");
+
+        public static double Load()
+        {
+            try
+            {
+                if (!File.Exists(FilePath)) return FpfOptions.DefaultFloorLiftMm;
+                if (double.TryParse(File.ReadAllText(FilePath).Trim().Replace(',', '.'), NumberStyles.Float,
+                        CultureInfo.InvariantCulture, out var v) && !double.IsNaN(v)) return v;
+            }
+            catch { /* ignore */ }
+            return FpfOptions.DefaultFloorLiftMm;
+        }
+
+        public static void Save(double mm)
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(FilePath));
+                File.WriteAllText(FilePath, mm.ToString("0.###", CultureInfo.InvariantCulture));
+            }
+            catch { /* not critical */ }
         }
     }
 

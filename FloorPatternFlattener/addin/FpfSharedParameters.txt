@@ -1,0 +1,8 @@
+# This is a Revit shared parameter file.
+*META	VERSION	MINVERSION
+META	2	1
+GROUP	ID	NAME
+GROUP	1	FPF
+PARAM	GUID	NAME	DATATYPE	DATACATEGORY	GROUP	VISIBLE	DESCRIPTION	USERMODIFIABLE
+PARAM	8f3c1a2b-6d4e-5f70-9a81-b2c3d4e5f607	FPF Lift (mm)	LENGTH		1	1	Floor Pattern Flattener: lift above draped top (mm)	1
+PARAM	9a4d2b3c-7e5f-6071-ab92-c3d4e5f60718	FPF Extra Lift (mm)	LENGTH		1	1	Floor Pattern Flattener: extra manual lift for this output (mm)	1

@@ -1,9 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Revit 2025 install pair. Copy this .addin and FloorPatternFlattener.dll into:
-    %AppData%\Autodesk\Revit\Addins\2025\
-  Assembly is the DLL file name, so both files must stay in that folder.
-  Restart Revit 2025.
+  Template Revit add-in manifest.
+  Install-Addin.ps1 copies this file into:
+    %AppData%\Autodesk\Revit\Addins\20XX\FloorPatternFlattener.addin
+  and rewrites <Assembly> to the built DLL path for that year.
+
+  Manual install: set Assembly to the full path of FloorPatternFlattener.dll
+  built for the matching Revit year, then place under the Addins\20XX folder.
 
   VendorId "TWISTOFFATE" is also the vendor id of the add-in's extensible storage schemas
   and of its (optional) Dynamic Model Update updater. Revit requires 4+ characters for schema

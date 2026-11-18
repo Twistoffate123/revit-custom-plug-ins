@@ -67,6 +67,18 @@ namespace FloorPatternFlattener.Ribbon
             });
 
             panel.AddItem(new PushButtonData(
+                "FPF_LiftSelected",
+                "Lift\nSelected",
+                asm,
+                "FloorPatternFlattener.Commands.CommandLiftSelected")
+            {
+                ToolTip = "Move selected flat pattern Generic Models (DirectShapes) in world Z. " +
+                          "Tab-select inside the floor model group if needed.",
+                LongDescription = "Enter a lift in millimetres (positive up, negative down). " +
+                                  "Stored as FPF Extra Lift (mm) on each element and kept on Refresh."
+            });
+
+            panel.AddItem(new PushButtonData(
                 "FPF_EditFlattenedPattern",
                 "Edit Flattened\nPattern",
                 asm,

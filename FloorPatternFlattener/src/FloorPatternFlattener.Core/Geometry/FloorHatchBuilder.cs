@@ -806,10 +806,13 @@ namespace FloorPatternFlattener.Geometry
 
         // ---------------------------------------------------------------- build
 
+        private static double _floorLiftFeet;
+
         public static FloorHatchResult Build(FloorHatchInput input, double shortCurveTolerance,
-            PatternPlacement placement = null)
+            PatternPlacement placement = null, double additionalFloorLiftFeet = 0)
         {
             placement = placement ?? PatternPlacement.Identity;
+            _floorLiftFeet = Math.Max(0, additionalFloorLiftFeet);
             var result = new FloorHatchResult();
             if (input == null || input.Pieces.Count == 0) return result;
 
@@ -832,6 +835,7 @@ namespace FloorPatternFlattener.Geometry
                 BuildGroup(group, input.Holes, placement, minLen, dotLen, result);
 
             AppendBoundary(input, minLen, result);
+            _floorLiftFeet = 0;
             return result;
         }
 
@@ -1030,10 +1034,11 @@ namespace FloorPatternFlattener.Geometry
         {
             if (piece == null) return new XYZ(x, y, offsetFeet);
             var z = piece.ZAt(x, y);
-            var ox = piece.Nx * offsetFeet;
-            var oy = piece.Ny * offsetFeet;
-            var oz = piece.Nz * offsetFeet;
-            var minWorldZ = z + FpfOptions.MinWorldZLifFeet;
+            var totalOffset = offsetFeet + _floorLiftFeet;
+            var ox = piece.Nx * totalOffset;
+            var oy = piece.Ny * totalOffset;
+            var oz = piece.Nz * totalOffset;
+            var minWorldZ = z + FpfOptions.MinWorldZLifFeet + _floorLiftFeet;
             var zOut = z + oz;
             if (zOut + 1.0e-9 < minWorldZ)
                 oz = minWorldZ - z;

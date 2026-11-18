@@ -34,4 +34,16 @@
   <ItemGroup>
     <Compile Include="RevitYearInfo.cs" />
   </ItemGroup>
+
+  <Target Name="CopyDist2025" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
+    <PropertyGroup>
+      <_DistDir>$(MSBuildThisFileDirectory)..\..\dist\2025</_DistDir>
+    </PropertyGroup>
+    <MakeDir Directories="$(_DistDir)" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(_DistDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(TargetDir)$(TargetName).deps.json" DestinationFolder="$(_DistDir)" SkipUnchangedFiles="true"
+          Condition="Exists('$(TargetDir)$(TargetName).deps.json')" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\addin\FloorPatternFlattener.addin" DestinationFolder="$(_DistDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\addin\FpfSharedParameters.txt" DestinationFolder="$(_DistDir)" SkipUnchangedFiles="true" />
+  </Target>
 </Project>

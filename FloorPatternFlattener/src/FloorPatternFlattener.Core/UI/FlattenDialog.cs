@@ -39,18 +39,20 @@ namespace FloorPatternFlattener.UI
         public bool AllowScope = true;
         public bool HideLive;
         public bool HideLiveInActiveView;
+        public double FloorLiftMm = FpfOptions.DefaultFloorLiftMm;
 
         public FlattenDialogState Clone() => new FlattenDialogState
         {
             Style = Style, Placement = Placement.Clone(), Scope = Scope, Title = Title, Info = Info,
             Status = Status, PreviewLive = PreviewLive, AllowScope = AllowScope, HideLive = HideLive,
-            HideLiveInActiveView = HideLiveInActiveView
+            HideLiveInActiveView = HideLiveInActiveView, FloorLiftMm = FloorLiftMm
         };
 
         /// <summary>Same geometry-relevant settings (style, placement, scope).</summary>
         public bool SameSettings(FlattenDialogState o) =>
             o != null && o.Style == Style && o.Scope == Scope && o.HideLive == HideLive &&
-            o.HideLiveInActiveView == HideLiveInActiveView && o.Placement.SameAs(Placement);
+            o.HideLiveInActiveView == HideLiveInActiveView && o.Placement.SameAs(Placement) &&
+            Math.Abs(o.FloorLiftMm - FloorLiftMm) < 1.0e-6;
     }
 
     /// <summary>Modal WPF dialog built in code (no XAML, so every Revit year compiles the same file).</summary>
@@ -59,7 +61,7 @@ namespace FloorPatternFlattener.UI
         private readonly FlattenDialogState _state;
         private readonly RadioButton _scopeSel, _scopeType;
         private readonly CheckBox _hideLive, _hideLiveInView;
-        private readonly TextBox _angle;
+        private readonly TextBox _angle, _liftMm;
         private readonly TextBlock _anchor, _anchor2, _status;
         public DialogAction Action { get; private set; } = DialogAction.Cancel;
 
@@ -154,6 +156,22 @@ namespace FloorPatternFlattener.UI
             };
             root.Children.Add(_hideLiveInView);
 
+            root.Children.Add(Header("Elevation"));
+            var liftRow = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
+            liftRow.Children.Add(new TextBlock
+            {
+                Text = "Default lift above draped top (mm):", VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 2, 6, 2)
+            });
+            _liftMm = new TextBox
+            {
+                Width = 70, Margin = new Thickness(0, 2, 0, 2), VerticalAlignment = VerticalAlignment.Center,
+                Text = state.FloorLiftMm.ToString("0.##", CultureInfo.InvariantCulture),
+                ToolTip = "Applied to each flattened floor on Apply / Refresh (instance parameter FPF Lift (mm) on outputs). Default matches automatic clearance (5 mm)."
+            };
+            liftRow.Children.Add(_liftMm);
+            root.Children.Add(liftRow);
+
             _status = Text(state.Status, true);
             _status.Margin = new Thickness(0, 10, 0, 0);
             root.Children.Add(_status);
@@ -218,6 +236,13 @@ namespace FloorPatternFlattener.UI
                 _state.HideLive = _hideLive.IsChecked == true;
                 _state.HideLiveInActiveView = _hideLiveInView.IsChecked == true;
                 _state.Scope = _scopeType.IsChecked == true ? ApplyScope.AllVisibleOfType : ApplyScope.SelectedFloors;
+                if (!double.TryParse(_liftMm.Text.Trim().Replace(',', '.'), NumberStyles.Float,
+                        CultureInfo.InvariantCulture, out var liftMm) || double.IsNaN(liftMm) || liftMm < 0)
+                {
+                    MessageBox.Show(this, "Enter lift as a non-negative number of millimetres.", Title);
+                    return;
+                }
+                _state.FloorLiftMm = liftMm;
             }
             Action = action;
             DialogResult = true;

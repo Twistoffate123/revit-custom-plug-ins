@@ -36,6 +36,8 @@ namespace FloorPatternFlattener.Services
         private List<View> _views;
         private Dictionary<string, List<DirectShape>> _shapesBySource;
         private bool _hideLiveInActiveView;
+        private Dictionary<int, double> _extraLiftByChunk = new Dictionary<int, double>();
+        private double _currentFloorLiftMm;
 
         public FlatPatternService(Document doc, FpfReport report, Func<ElementId, bool> canEdit, View activeView = null)
         {
@@ -62,13 +64,15 @@ namespace FloorPatternFlattener.Services
         /// </summary>
         public bool Apply(Floor floor, ApplyMode mode, bool applyViewGraphics, FlattenStyle? requestedStyle = null,
             PatternPlacement requestedPlacement = null, bool? requestedHideLive = null,
-            bool? hideLiveInActiveView = null)
+            bool? hideLiveInActiveView = null, double? requestedFloorLiftMm = null)
         {
             if (floor == null || !floor.IsValidObject) return false;
+            FpfProjectParameters.EnsureBound(_doc);
             _hideLiveInActiveView = hideLiveInActiveView ?? LastHideLiveInActiveViewSetting.Load();
             try
             {
-                return ApplyCore(floor, mode, applyViewGraphics, requestedStyle, requestedPlacement, requestedHideLive);
+                return ApplyCore(floor, mode, applyViewGraphics, requestedStyle, requestedPlacement, requestedHideLive,
+                    requestedFloorLiftMm);
             }
             catch (Exception ex)
             {
@@ -78,7 +82,7 @@ namespace FloorPatternFlattener.Services
         }
 
         private bool ApplyCore(Floor floor, ApplyMode mode, bool applyViewGraphics, FlattenStyle? requestedStyle,
-            PatternPlacement requestedPlacement, bool? requestedHideLive)
+            PatternPlacement requestedPlacement, bool? requestedHideLive, double? requestedFloorLiftMm)
         {
             // "Hide live floor pattern and fold lines": a mark in the floor's Comments that the
             // "FPF - Live Floor (hidden pattern)" view filter keys on (works through links, "By Host View").
@@ -125,6 +129,8 @@ namespace FloorPatternFlattener.Services
             _currentPlacement = placement;
             LastFloorSegments = 0;
             var existing = ResolveLinkedShapes(floor, link, out var linksOk);
+            _currentFloorLiftMm = ResolveFloorLiftMm(floor, existing, requestedFloorLiftMm);
+            _extraLiftByChunk = CollectExtraLiftByChunk(existing);
 
             if (mode == ApplyMode.ValidateLinks && wasFlattened && linksOk && style == storedStyle && !placementChanged)
                 return false;
@@ -140,7 +146,7 @@ namespace FloorPatternFlattener.Services
                 return markChanged;
             }
 
-            var signature = EffectiveSignature(input.Signature, style, placement);
+            var signature = EffectiveSignature(input.Signature, style, placement, _currentFloorLiftMm);
 
             if (mode != ApplyMode.Force && wasFlattened && linksOk && link.Signature == signature)
             {
@@ -179,7 +185,8 @@ namespace FloorPatternFlattener.Services
             _report.NonPlanarFaces += input.NonPlanarFaces;
             foreach (var note in input.Notes) _report.AddWarning(floor, note);
 
-            var build = FloorHatchBuilder.Build(input, _doc.Application.ShortCurveTolerance, _currentPlacement);
+            var liftFeet = AdditionalLiftFeet(_currentFloorLiftMm);
+            var build = FloorHatchBuilder.Build(input, _doc.Application.ShortCurveTolerance, _currentPlacement, liftFeet);
             if (build.Segments.Count == 0)
             {
                 var why = "pattern produced no lines";
@@ -215,7 +222,7 @@ namespace FloorPatternFlattener.Services
                 {
                     placementChanged = true;
                     _currentPlacement = placement;
-                    build = FloorHatchBuilder.Build(input, _doc.Application.ShortCurveTolerance, placement);
+                    build = FloorHatchBuilder.Build(input, _doc.Application.ShortCurveTolerance, placement, liftFeet);
                     PatternAngleMatcher.RefreshFlatFromBuild(build, angleCheck);
                     _report.PatternAngles[_report.PatternAngles.Count - 1] =
                         PatternAngleMatcher.FormatForReport(floor, angleCheck);
@@ -246,7 +253,10 @@ namespace FloorPatternFlattener.Services
                 _report.Heavy.Add(FpfReport.Describe(floor) + ": " + LastFloorSegments.ToString("N0") +
                     " lines in " + shapes.Count + " DirectShape(s) (hatch chunked, edges one per line).");
 
-            var elevReport = VerifyElevationsAndCorrect(floor, shapes, input, out var group);
+            var elevReport = VerifyElevationsAndCorrect(floor, shapes, input, out var group, _currentFloorLiftMm);
+            MirrorLiftParameters(floor, shapes, group, _currentFloorLiftMm);
+            try { FpfStorage.WriteFloorLiftMm(floor, _currentFloorLiftMm); }
+            catch { /* ignore */ }
 
             // ---- floor link (written last; signature guards the updater against re-trigger loops)
             if (style != storedStyle || legacySurface) FpfStorage.WriteStyle(floor, style);
@@ -283,12 +293,67 @@ namespace FloorPatternFlattener.Services
         /// <summary>
         /// Lines keep the original signature (no rebuild of existing floors after the upgrade).
         /// </summary>
-        private static string EffectiveSignature(string inputSignature, FlattenStyle style, PatternPlacement placement)
+        private static string EffectiveSignature(string inputSignature, FlattenStyle style, PatternPlacement placement,
+            double floorLiftMm)
         {
             var sig = inputSignature;
             // Identity adds nothing, so floors flattened before rotation existed are not rebuilt.
             if (placement != null && !placement.IsIdentity) sig += "|P" + placement.ToStorage();
+            sig += "|L" + floorLiftMm.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
             return sig;
+        }
+
+        private static double AdditionalLiftFeet(double floorLiftMm)
+        {
+            var target = FpfProjectParameters.MmToFeet(Math.Max(0, floorLiftMm));
+            var base_ = FpfOptions.VerifiedClearanceAboveTopFeet;
+            return Math.Max(0, target - base_);
+        }
+
+        private static double ResolveFloorLiftMm(Floor floor, IList<DirectShape> existing, double? requested)
+        {
+            if (requested.HasValue) return requested.Value;
+            if (existing != null)
+            {
+                foreach (var ds in existing)
+                {
+                    if (ds == null || !ds.IsValidObject) continue;
+                    var fromParam = FpfProjectParameters.ReadLiftMm(ds);
+                    if (fromParam.HasValue) return fromParam.Value;
+                }
+            }
+            var stored = FpfStorage.ReadFloorLiftMm(floor);
+            if (stored.HasValue) return stored.Value;
+            return LastFloorLiftSetting.Load();
+        }
+
+        private static Dictionary<int, double> CollectExtraLiftByChunk(IList<DirectShape> existing)
+        {
+            var map = new Dictionary<int, double>();
+            if (existing == null) return map;
+            foreach (var ds in existing)
+            {
+                if (ds == null || !ds.IsValidObject) continue;
+                var link = FpfStorage.ReadDirectShape(ds);
+                var chunk = link?.ChunkIndex ?? 0;
+                var extra = FpfProjectParameters.ReadExtraLiftMm(ds) ?? link?.ExtraLiftMm ?? 0;
+                if (Math.Abs(extra) > 1.0e-9) map[chunk] = extra;
+            }
+            return map;
+        }
+
+        private void MirrorLiftParameters(Floor floor, List<DirectShape> shapes, Group group, double floorLiftMm)
+        {
+            foreach (var ds in shapes)
+            {
+                if (ds == null || !ds.IsValidObject) continue;
+                FpfProjectParameters.WriteLiftMm(ds, floorLiftMm);
+                var link = FpfStorage.ReadDirectShape(ds);
+                var extra = link?.ExtraLiftMm ?? FpfProjectParameters.ReadExtraLiftMm(ds) ?? 0;
+                if (Math.Abs(extra) > 1.0e-9) FpfProjectParameters.WriteExtraLiftMm(ds, extra);
+            }
+            if (group != null && group.IsValidObject)
+                FpfProjectParameters.WriteLiftMm(group, floorLiftMm);
         }
 
         private PatternPlacement _currentPlacement = PatternPlacement.Identity;
@@ -361,7 +426,7 @@ namespace FloorPatternFlattener.Services
             }
 
             for (var i = 0; i < chunks.Count; i++)
-                CommitChunk(floor, chunks[i], chunkLayers[i], existing, created, shapes);
+                CommitChunk(floor, chunks[i], chunkLayers[i], existing, created, shapes, i);
         }
 
         /// <summary>
@@ -369,7 +434,7 @@ namespace FloorPatternFlattener.Services
         /// line cannot drop the rest of the floor. There is no maximum number of shapes.
         /// </summary>
         private void CommitChunk(Floor floor, List<Segment3> segs, PatternLayer layer, List<DirectShape> existing,
-            List<DirectShape> created, List<DirectShape> shapes)
+            List<DirectShape> created, List<DirectShape> shapes, int chunkIndex)
         {
             if (segs == null || segs.Count == 0) return;
             var ds = ShapeAt(floor, existing, created, shapes.Count);
@@ -383,14 +448,29 @@ namespace FloorPatternFlattener.Services
                     return;
                 }
                 var mid = segs.Count / 2;
-                CommitChunk(floor, segs.GetRange(0, mid), layer, existing, created, shapes);
-                CommitChunk(floor, segs.GetRange(mid, segs.Count - mid), layer, existing, created, shapes);
+                CommitChunk(floor, segs.GetRange(0, mid), layer, existing, created, shapes, chunkIndex);
+                CommitChunk(floor, segs.GetRange(mid, segs.Count - mid), layer, existing, created, shapes, chunkIndex + 10000);
                 return;
             }
 
             var kind = layer?.Kind ?? PatternLayerKind.Foreground;
-            ConfigureShape(ds, floor, shapes.Count, shapes.Count + 1, _styles.GetFloorLayerTypeId(floor, kind),
-                FpfFloorNaming.LayerLabel(kind));
+            var slot = shapes.Count;
+            var extraMm = 0.0;
+            if (_extraLiftByChunk.TryGetValue(slot, out var preserved)) extraMm = preserved;
+            ConfigureShape(ds, floor, slot, shapes.Count + 1, _styles.GetFloorLayerTypeId(floor, kind),
+                FpfFloorNaming.LayerLabel(kind), extraMm);
+            if (Math.Abs(extraMm) > 1.0e-9)
+            {
+                try
+                {
+                    ElementTransformUtils.MoveElement(_doc, ds.Id, new XYZ(0, 0, FpfProjectParameters.MmToFeet(extraMm)));
+                }
+                catch (Exception ex)
+                {
+                    _report.Errors.Add("Could not re-apply extra lift on " + FpfReport.Describe(ds) + ": " + ex.Message);
+                }
+            }
+            FpfProjectParameters.WriteLiftMm(ds, _currentFloorLiftMm);
             shapes.Add(ds);
             _report.Segments += segs.Count;
             LastFloorSegments += segs.Count;
@@ -486,28 +566,29 @@ namespace FloorPatternFlattener.Services
             }
         }
 
-        private string VerifyElevationsAndCorrect(Floor floor, List<DirectShape> shapes, FloorHatchInput input, out Group group)
+        private string VerifyElevationsAndCorrect(Floor floor, List<DirectShape> shapes, FloorHatchInput input, out Group group,
+            double floorLiftMm)
         {
             group = null;
             var audit = new GeneratedElevationVerifier.Report();
-            audit.PreGroup = GeneratedElevationVerifier.Measure(_doc, shapes, input, "pre-group");
-            var moved = GeneratedElevationVerifier.CorrectBelowTop(_doc, shapes, input, out _);
+            audit.PreGroup = GeneratedElevationVerifier.Measure(_doc, shapes, input, "pre-group", floorLiftMm);
+            var moved = GeneratedElevationVerifier.CorrectBelowTop(_doc, shapes, input, out _, floorLiftMm);
             audit.ShapesMoved += moved;
             if (moved > 0)
-                audit.PreGroup = GeneratedElevationVerifier.Measure(_doc, shapes, input, "pre-group (after move)");
+                audit.PreGroup = GeneratedElevationVerifier.Measure(_doc, shapes, input, "pre-group (after move)", floorLiftMm);
 
             group = TryGroupPatternShapes(floor, shapes);
-            audit.PostGroup = GeneratedElevationVerifier.Measure(_doc, shapes, input, "post-group");
+            audit.PostGroup = GeneratedElevationVerifier.Measure(_doc, shapes, input, "post-group", floorLiftMm);
             if (audit.PostGroup.BelowTop > 0)
             {
                 DissolvePatternGroups(shapes);
                 group = null;
-                var moved2 = GeneratedElevationVerifier.CorrectBelowTop(_doc, shapes, input, out _);
+                var moved2 = GeneratedElevationVerifier.CorrectBelowTop(_doc, shapes, input, out _, floorLiftMm);
                 audit.ShapesMoved += moved2;
                 if (moved2 > 0)
-                    audit.PreGroup = GeneratedElevationVerifier.Measure(_doc, shapes, input, "regroup prep");
+                    audit.PreGroup = GeneratedElevationVerifier.Measure(_doc, shapes, input, "regroup prep", floorLiftMm);
                 group = TryGroupPatternShapes(floor, shapes);
-                audit.PostGroup = GeneratedElevationVerifier.Measure(_doc, shapes, input, "post-group (corrected)");
+                audit.PostGroup = GeneratedElevationVerifier.Measure(_doc, shapes, input, "post-group (corrected)", floorLiftMm);
             }
 
             if (group != null)
@@ -557,7 +638,7 @@ namespace FloorPatternFlattener.Services
         }
 
         private void ConfigureShape(DirectShape ds, Floor floor, int chunkIndex, int chunkCount, ElementId typeId,
-            string label)
+            string label, double extraLiftMm = 0)
         {
             // Type per layer / mode: lets view filters target "Type Name" / "Type Comments" =
             // FPF Flat Pattern - Foreground / Background.
@@ -616,13 +697,16 @@ namespace FloorPatternFlattener.Services
                 FpfStorage.WriteDirectShape(ds, new DirectShapeLinkData
                 {
                     SourceFloorUniqueId = floor.UniqueId,
-                    ChunkIndex = chunkIndex
+                    ChunkIndex = chunkIndex,
+                    ExtraLiftMm = extraLiftMm
                 });
             }
             catch (Exception ex)
             {
                 _report.Errors.Add("Could not write link data on " + FpfReport.Describe(ds) + ": " + ex.Message);
             }
+
+            if (Math.Abs(extraLiftMm) > 1.0e-9) FpfProjectParameters.WriteExtraLiftMm(ds, extraLiftMm);
 
             try { if (!ds.Pinned) ds.Pinned = true; } catch { /* ignore */ }
         }
@@ -875,6 +959,28 @@ namespace FloorPatternFlattener.Services
 
         private void InvalidateShapeIndex() => _shapesBySource = null;
 
+        /// <summary>Lift (mm) shown in the Flatten / Edit dialog for an existing flattened floor.</summary>
+        public static double GetFloorLiftMmForDisplay(Floor floor)
+        {
+            if (floor == null) return LastFloorLiftSetting.Load();
+            var link = FpfStorage.ReadFloor(floor);
+            var doc = floor.Document;
+            if (link?.DirectShapeUniqueIds != null)
+            {
+                foreach (var uid in link.DirectShapeUniqueIds)
+                {
+                    if (doc.GetElement(uid) is DirectShape ds)
+                    {
+                        var p = FpfProjectParameters.ReadLiftMm(ds);
+                        if (p.HasValue) return p.Value;
+                    }
+                }
+            }
+            var stored = FpfStorage.ReadFloorLiftMm(floor);
+            if (stored.HasValue) return stored.Value;
+            return LastFloorLiftSetting.Load();
+        }
+
         /// <summary>Read-only staleness check used on document open (no model changes).</summary>
         public static bool IsStale(Floor floor, PatternReader patterns)
         {
@@ -888,8 +994,9 @@ namespace FloorPatternFlattener.Services
             }
             try
             {
+                var lift = GetFloorLiftMmForDisplay(floor);
                 var sig = EffectiveSignature(FloorHatchBuilder.ReadInput(floor, patterns).Signature, FpfStorage.ReadStyle(floor),
-                    FpfStorage.ReadPlacement(floor));
+                    FpfStorage.ReadPlacement(floor), lift);
                 return sig != link.Signature;
             }
             catch

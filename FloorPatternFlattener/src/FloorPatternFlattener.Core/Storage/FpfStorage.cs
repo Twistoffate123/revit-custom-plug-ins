@@ -21,6 +21,8 @@ namespace FloorPatternFlattener.Storage
         public int Version = FpfOptions.SchemaDataVersion;
         public string SourceFloorUniqueId = string.Empty;
         public int ChunkIndex;
+        /// <summary>Manual world-Z tweak for this chunk (mm); kept on Refresh.</summary>
+        public double ExtraLiftMm;
     }
 
     /// <summary>
@@ -44,6 +46,9 @@ namespace FloorPatternFlattener.Storage
         public static readonly Guid FloorPlacementSchemaGuid = new Guid("D2B6F1C8-5E3A-4A97-9C04-71E8B3A6D5F2");
         private const string FPlacement = "Placement";
 
+        public static readonly Guid FloorLiftSchemaGuid = new Guid("B3E8C5A1-7F2D-4E96-8C10-5A9D3E7F1B42");
+        private const string FLiftMm = "LiftMm";
+
         private const string FVersion = "Version";
         private const string FFlattened = "Flattened";
         private const string FDsIds = "DirectShapeUniqueIds";
@@ -51,6 +56,7 @@ namespace FloorPatternFlattener.Storage
         private const string FDeps = "DependencyUniqueIds";
         private const string FSource = "SourceFloorUniqueId";
         private const string FChunk = "ChunkIndex";
+        private const string FExtraLiftMm = "ExtraLiftMm";
 
         private static readonly object Gate = new object();
 
@@ -121,6 +127,42 @@ namespace FloorPatternFlattener.Storage
                         "Floor Pattern Flattener: pattern rotation and edge anchor of the floor (plan, internal feet).");
                     b.AddSimpleField(FVersion, typeof(int));
                     b.AddSimpleField(FPlacement, typeof(string));
+                    return b.Finish();
+                }
+            }
+        }
+
+        public static Schema FloorLiftSchema
+        {
+            get
+            {
+                lock (Gate)
+                {
+                    var s = Schema.Lookup(FloorLiftSchemaGuid);
+                    if (s != null) return s;
+                    var b = NewBuilder(FloorLiftSchemaGuid, "FPF_FloorLift",
+                        "Floor Pattern Flattener: lift above draped top (millimetres).");
+                    b.AddSimpleField(FVersion, typeof(int));
+                    b.AddSimpleField(FLiftMm, typeof(double));
+                    return b.Finish();
+                }
+            }
+        }
+
+        public static readonly Guid DirectShapeExtraSchemaGuid = new Guid("C5D9E8F2-A4B6-4C7D-9E0F-1A2B3C4D5E6F");
+
+        public static Schema DirectShapeExtraSchema
+        {
+            get
+            {
+                lock (Gate)
+                {
+                    var s = Schema.Lookup(DirectShapeExtraSchemaGuid);
+                    if (s != null) return s;
+                    var b = NewBuilder(DirectShapeExtraSchemaGuid, "FPF_ShapeExtraLift",
+                        "Floor Pattern Flattener: extra manual world-Z lift for one output (millimetres).");
+                    b.AddSimpleField(FVersion, typeof(int));
+                    b.AddSimpleField(FExtraLiftMm, typeof(double));
                     return b.Finish();
                 }
             }
@@ -361,6 +403,33 @@ namespace FloorPatternFlattener.Storage
             }
         }
 
+        // ------------------------------------------------------------ floor lift
+
+        public static double? ReadFloorLiftMm(Element floor)
+        {
+            if (floor == null) return null;
+            try
+            {
+                var schema = Schema.Lookup(FloorLiftSchemaGuid);
+                if (schema == null) return null;
+                var e = floor.GetEntity(schema);
+                if (e == null || !e.IsValid()) return null;
+                return e.Get<double>(FLiftMm);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        public static void WriteFloorLiftMm(Element floor, double mm)
+        {
+            var e = new Entity(FloorLiftSchema);
+            e.Set(FVersion, FpfOptions.SchemaDataVersion);
+            e.Set(FLiftMm, mm);
+            floor.SetEntity(e);
+        }
+
         // ------------------------------------------------------------ direct shape
 
         public static DirectShapeLinkData ReadDirectShape(Element ds)
@@ -375,6 +444,19 @@ namespace FloorPatternFlattener.Storage
             try { d.Version = e.Get<int>(FVersion); } catch { /* ignore */ }
             try { d.SourceFloorUniqueId = e.Get<string>(FSource) ?? string.Empty; } catch { /* ignore */ }
             try { d.ChunkIndex = e.Get<int>(FChunk); } catch { /* ignore */ }
+            try
+            {
+                var exSchema = Schema.Lookup(DirectShapeExtraSchemaGuid);
+                if (exSchema != null)
+                {
+                    var ex = ds.GetEntity(exSchema);
+                    if (ex != null && ex.IsValid()) d.ExtraLiftMm = ex.Get<double>(FExtraLiftMm);
+                }
+            }
+            catch
+            {
+                // ignore
+            }
             return d;
         }
 
@@ -385,6 +467,13 @@ namespace FloorPatternFlattener.Storage
             e.Set(FSource, data.SourceFloorUniqueId ?? string.Empty);
             e.Set(FChunk, data.ChunkIndex);
             ds.SetEntity(e);
+            if (Math.Abs(data.ExtraLiftMm) > 1.0e-9)
+            {
+                var ex = new Entity(DirectShapeExtraSchema);
+                ex.Set(FVersion, FpfOptions.SchemaDataVersion);
+                ex.Set(FExtraLiftMm, data.ExtraLiftMm);
+                ds.SetEntity(ex);
+            }
         }
 
         // ------------------------------------------------------------ queries

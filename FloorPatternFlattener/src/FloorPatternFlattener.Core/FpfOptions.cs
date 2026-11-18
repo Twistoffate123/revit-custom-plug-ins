@@ -73,7 +73,7 @@ namespace FloorPatternFlattener
         public const string DirectShapeNamePrefix = "Flat Pattern - Floor ";
 
         /// <summary>Bump when hatch generation changes so stored signatures no longer match.</summary>
-        public const int AlgorithmVersion = 13; // 13: elevation read-back, active-view live pattern hide
+        public const int AlgorithmVersion = 14; // 14: user floor lift + per-shape extra lift
 
         /// <summary>Extensible storage schema version written into every entity.</summary>
         public const int SchemaDataVersion = 1;
@@ -89,6 +89,9 @@ namespace FloorPatternFlattener
 
         /// <summary>Default when no per-run choice: hide live surface pattern in the active plan view after flatten.</summary>
         public static bool HideLivePatternInActiveViewOnFlatten = true;
+
+        /// <summary>Default floor lift (mm) when flattening / Refresh (matches verified clearance).</summary>
+        public const double DefaultFloorLiftMm = 5.0;
 
         /// <summary>A top face must have normal.Z above this to be considered upward-facing (~87 deg max slope).</summary>
         public const double MinUpwardNormalZ = 0.05;
