@@ -14,6 +14,7 @@ namespace FloorPatternFlattener.Services
             var grouped = ds.GroupId != null && ds.GroupId != ElementId.InvalidElementId;
             if (!grouped)
             {
+                OutputPin.Unpin(ds);
                 ElementTransformUtils.MoveElement(doc, ds.Id, new XYZ(0, 0, deltaFeet));
                 return true;
             }

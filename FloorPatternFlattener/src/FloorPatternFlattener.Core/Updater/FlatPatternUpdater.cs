@@ -468,6 +468,7 @@ namespace FloorPatternFlattener.Updater
             _applyingGroupLift++;
             try
             {
+                OutputPin.UnpinGroup(doc, group);
                 ElementTransformUtils.MoveElement(doc, group.Id, new XYZ(0, 0, deltaMm / 304.8));
                 FpfStorage.WriteFloorLiftMm(group, param.Value);
                 if (floor != null) FpfStorage.WriteFloorLiftMm(floor, param.Value);

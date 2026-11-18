@@ -126,6 +126,7 @@ namespace FloorPatternFlattener.Services
             {
                 try
                 {
+                    OutputPin.Unpin(doc.GetElement(kv.Key));
                     ElementTransformUtils.MoveElement(doc, kv.Key, new XYZ(0, 0, kv.Value));
                 }
                 catch
@@ -164,6 +165,7 @@ namespace FloorPatternFlattener.Services
             var moved = HatchClipPolicy.GroupingShiftCorrection(preMin, groupMin, tolFeet);
             if (Math.Abs(moved) > 1.0e-12)
             {
+                OutputPin.UnpinGroup(doc, group);
                 if (!TryMoveVertical(doc, group.Id, moved))
                     return "floorTop=" + F(floorTop) + " preMin=" + F(preMin) + " groupMin=" + F(groupMin) +
                            " groupMax=" + F(groupMax) + " moveFailed delta=" + F(moved);

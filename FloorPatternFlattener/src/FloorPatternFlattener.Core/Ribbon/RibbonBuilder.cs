@@ -59,7 +59,7 @@ namespace FloorPatternFlattener.Ribbon
                           "Preview, Apply, Discard. The live floor pattern is left as it is.",
                 LongDescription =
                     "The material's fill pattern is generated in plan (aligned to the project internal origin), " +
-                    "projected onto every top face and stored as pinned Generic Model lines (Comments = \"" +
+                    "projected onto every top face and stored as unpinned Generic Model lines (Comments = \"" +
                     FpfOptions.CommentsTag + "\", types \"" + FpfOptions.ForegroundTypeName + "\" / \"" +
                     FpfOptions.BackgroundTypeName + "\"); filters control Projection Lines.\n" +
                     "Each floor remembers its rotation and anchor; the flat pattern is saved with the model and regenerates " +

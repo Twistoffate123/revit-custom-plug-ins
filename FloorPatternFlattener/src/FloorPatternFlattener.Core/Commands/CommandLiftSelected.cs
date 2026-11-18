@@ -67,7 +67,10 @@ namespace FloorPatternFlattener.Commands
                                 continue;
                             }
                             if (groupsMoved.Add(group.Id))
+                            {
+                                OutputPin.UnpinGroup(doc, group);
                                 ElementTransformUtils.MoveElement(doc, group.Id, new XYZ(0, 0, deltaFeet));
+                            }
                         }
 
                         foreach (var ds in batch)

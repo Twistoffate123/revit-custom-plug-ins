@@ -613,7 +613,14 @@ namespace FloorPatternFlattener.Services
                     if (ds != null && ds.IsValidObject) ids.Add(ds.Id);
                 }
                 if (ids.Count == 0) return null;
+                // Earlier builds pinned every chunk. Unpin while the shapes are still free
+                // elements; NewGroup keeps that pin and Align then fails once per member.
+                var unpinned = OutputPin.UnpinAll(shapes);
+                FpfRefreshLog.LogIfActive("unpin", 0,
+                    "shapes=" + ids.Count.ToString(CultureInfo.InvariantCulture) +
+                    " unpinned=" + unpinned.ToString(CultureInfo.InvariantCulture));
                 var group = _doc.Create.NewGroup(ids);
+                OutputPin.Unpin(group);
                 var typeId = group?.GroupType?.Id ?? ElementId.InvalidElementId;
                 var gt = typeId != ElementId.InvalidElementId ? _doc.GetElement(typeId) as GroupType : null;
                 if (gt != null)
@@ -817,7 +824,7 @@ namespace FloorPatternFlattener.Services
 
             if (Math.Abs(extraLiftMm) > 1.0e-9) FpfProjectParameters.WriteExtraLiftMm(ds, extraLiftMm);
 
-            try { if (!ds.Pinned) ds.Pinned = true; } catch { /* ignore */ }
+            OutputPin.Unpin(ds);
         }
 
         private static void SetString(Element e, BuiltInParameter bip, string value)
