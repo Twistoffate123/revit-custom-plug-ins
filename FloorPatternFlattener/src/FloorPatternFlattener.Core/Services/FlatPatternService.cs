@@ -631,7 +631,16 @@ namespace FloorPatternFlattener.Services
         private string GroupShapesAndPlannedElevationNote(Floor floor, List<DirectShape> shapes, FloorHatchInput input,
             out Group group, double floorLiftMm)
         {
+            GeneratedElevationVerifier.TryAggregateBboxZ(shapes, out var preShapeMin, out _);
             group = TryGroupPatternShapes(floor, shapes);
+            if (group != null)
+            {
+                var sw = Stopwatch.StartNew();
+                var zLog = GeneratedElevationVerifier.VerifyAndCorrectGroupZ(_doc, group, preShapeMin, input, floorLiftMm);
+                sw.Stop();
+                FpfRefreshLog.LogIfActive("z-check", sw.ElapsedMilliseconds, zLog);
+            }
+
             return GeneratedElevationVerifier.BuildPlannedSummary(floor, input, floorLiftMm);
         }
 
@@ -672,7 +681,7 @@ namespace FloorPatternFlattener.Services
 
             try
             {
-                var sampleZ = FloorHatchBuilder.LastPlanDisplayBaseZ;
+                var sampleZ = FloorHatchBuilder.LastPlannedHatchBaseZ;
                 if (!double.IsFinite(sampleZ)) sampleZ = 0;
                 sampleZ += FpfOptions.PatternAboveTopFeet;
                 var detail = ViewGraphics.EnsurePlanViewVisibility(_doc, _activeView, floor, shapes, sampleZ);

@@ -136,12 +136,121 @@ namespace FloorPatternFlattener.Services
             return moves.Count;
         }
 
+        /// <summary>No-op: setting group level/offset can shift grouped DirectShapes in Z.</summary>
         public static void TryAlignGroupToFloor(Document doc, Group group, Floor floor)
         {
-            if (doc == null || group == null || floor == null) return;
-            // Set reference level only; do not write GROUP_OFFSET_FROM_LEVEL (display metadata, not geometry).
-            TrySetGroupLevel(group, floor.LevelId);
         }
+
+        /// <summary>
+        /// One read-back per floor: pre-group shape Z vs group bbox; correct grouping shift, then vs draped top.
+        /// </summary>
+        public static string VerifyAndCorrectGroupZ(Document doc, Group group, double preShapeMinZ,
+            FloorHatchInput input, double floorLiftMm)
+        {
+            if (doc == null || group == null || !group.IsValidObject || input == null)
+                return "z-check skipped";
+
+            var floorTop = SampleFloorTopZ(input);
+            var preMin = preShapeMinZ;
+
+            BoundingBoxXYZ bb = null;
+            try { bb = group.get_BoundingBox(null); } catch { bb = null; }
+            if (bb == null)
+                return "floorTop=" + F(floorTop) + " groupMin=n/a groupMax=n/a moved=0";
+
+            var groupMin = bb.Min.Z;
+            var groupMax = bb.Max.Z;
+            const double tolFeet = 0.05;
+            var moved = 0.0;
+
+            if (double.IsFinite(preMin))
+            {
+                var groupShift = preMin - groupMin;
+                if (Math.Abs(groupShift) > tolFeet)
+                {
+                    if (TryMoveVertical(doc, group.Id, groupShift))
+                    {
+                        moved += groupShift;
+                        groupMin += groupShift;
+                        groupMax += groupShift;
+                    }
+                }
+            }
+
+            var patternLift = FpfProjectParameters.MmToFeet(Math.Max(FpfOptions.DefaultFloorLiftMm, floorLiftMm));
+            if (patternLift + 1.0e-12 < FpfOptions.PatternAboveTopFeet)
+                patternLift = FpfOptions.PatternAboveTopFeet;
+            if (double.IsFinite(floorTop))
+            {
+                var expectedHatchMin = floorTop + patternLift;
+                var alignDelta = expectedHatchMin - groupMin;
+                if (Math.Abs(alignDelta) > tolFeet)
+                {
+                    if (TryMoveVertical(doc, group.Id, alignDelta))
+                    {
+                        moved += alignDelta;
+                        groupMin += alignDelta;
+                        groupMax += alignDelta;
+                    }
+                }
+            }
+
+            return "floorTop=" + F(floorTop) + " preMin=" + F(preMin) + " groupMin=" + F(groupMin) +
+                   " groupMax=" + F(groupMax) + " moved=" + F(moved);
+        }
+
+        private static bool TryMoveVertical(Document doc, ElementId id, double dz)
+        {
+            if (doc == null || id == null || id == ElementId.InvalidElementId || Math.Abs(dz) < 1.0e-12) return false;
+            try
+            {
+                ElementTransformUtils.MoveElement(doc, id, new XYZ(0, 0, dz));
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        internal static void TryAggregateBboxZ(IEnumerable<DirectShape> shapes, out double minZ, out double maxZ)
+        {
+            minZ = double.PositiveInfinity;
+            maxZ = double.NegativeInfinity;
+            if (shapes == null) return;
+            foreach (var ds in shapes)
+            {
+                if (ds == null || !ds.IsValidObject) continue;
+                BoundingBoxXYZ bb = null;
+                try { bb = ds.get_BoundingBox(null); } catch { bb = null; }
+                if (bb == null) continue;
+                if (bb.Min.Z < minZ) minZ = bb.Min.Z;
+                if (bb.Max.Z > maxZ) maxZ = bb.Max.Z;
+            }
+
+            if (!double.IsFinite(minZ)) minZ = double.NaN;
+            if (!double.IsFinite(maxZ)) maxZ = double.NaN;
+        }
+
+        private static double SampleFloorTopZ(FloorHatchInput input)
+        {
+            if (input?.Pieces == null || input.Pieces.Count == 0) return double.NaN;
+            double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
+            foreach (var p in input.Pieces)
+            {
+                if (p?.Region == null || p.Region.IsEmpty) continue;
+                if (p.Region.MinX < minX) minX = p.Region.MinX;
+                if (p.Region.MinY < minY) minY = p.Region.MinY;
+                if (p.Region.MaxX > maxX) maxX = p.Region.MaxX;
+                if (p.Region.MaxY > maxY) maxY = p.Region.MaxY;
+            }
+
+            var cx = minX > maxX ? 0 : (minX + maxX) * 0.5;
+            var cy = minY > maxY ? 0 : (minY + maxY) * 0.5;
+            return SampleTopZ(input, cx, cy);
+        }
+
+        private static string F(double v) => double.IsFinite(v) ? v.ToString("0.####", CultureInfo.InvariantCulture) : "n/a";
 
         public static string FormatFtMm(double feet)
         {
@@ -285,19 +394,5 @@ namespace FloorPatternFlattener.Services
             }
         }
 
-        private static void TrySetGroupLevel(Group group, ElementId levelId)
-        {
-            if (levelId == null || levelId == ElementId.InvalidElementId) return;
-            try
-            {
-                var p = group.get_Parameter(BuiltInParameter.GROUP_LEVEL);
-                if (p != null && !p.IsReadOnly && p.StorageType == StorageType.ElementId)
-                    p.Set(levelId);
-            }
-            catch
-            {
-                // ignore
-            }
-        }
     }
 }
