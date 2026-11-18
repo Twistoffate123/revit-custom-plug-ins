@@ -18,8 +18,6 @@ namespace FloorPatternFlattener.Services
 
         private static Definition _liftDef;
         private static Definition _extraLiftDef;
-        private static readonly System.Collections.Generic.HashSet<string> BoundDocuments =
-            new System.Collections.Generic.HashSet<string>();
 
         /// <summary>Does not change Revit's shared-parameter file path (see <see cref="EnsureBound"/>).</summary>
         public static void ConfigureSharedParameterFile(ControlledApplication app)
@@ -34,11 +32,18 @@ namespace FloorPatternFlattener.Services
         public static void EnsureBound(Document doc)
         {
             if (doc == null || doc.IsFamilyDocument) return;
-            var key = DocKey(doc);
-            if (BoundDocuments.Contains(key)) return;
+            if (!doc.IsModifiable)
+            {
+                FpfRefreshLog.LogUpdater("binding skipped reason=no-transaction");
+                return;
+            }
 
             var fpfPath = FpfSharedParametersPath();
-            if (!File.Exists(fpfPath)) return;
+            if (!File.Exists(fpfPath))
+            {
+                FpfRefreshLog.LogUpdater("binding skipped reason=missing-file path=" + fpfPath);
+                return;
+            }
 
             var app = doc.Application;
             var originalPath = app.SharedParametersFilename;
@@ -52,22 +57,40 @@ namespace FloorPatternFlattener.Services
                 }
 
                 var defFile = app.OpenSharedParameterFile();
-                if (defFile == null) return;
+                if (defFile == null)
+                {
+                    FpfRefreshLog.LogUpdater("binding skipped reason=shared-file-unreadable");
+                    return;
+                }
+
                 var grp = defFile.Groups.get_Item("FPF") ?? defFile.Groups.FirstOrDefault();
-                if (grp == null) return;
+                if (grp == null)
+                {
+                    FpfRefreshLog.LogUpdater("binding skipped reason=no-FPF-group");
+                    return;
+                }
+
                 _liftDef = grp.Definitions.get_Item(LiftName);
                 _extraLiftDef = grp.Definitions.get_Item(ExtraLiftName);
-                if (_liftDef == null || _extraLiftDef == null) return;
+                if (_liftDef == null || _extraLiftDef == null)
+                {
+                    FpfRefreshLog.LogUpdater("binding skipped reason=definition-missing");
+                    return;
+                }
 
-                // One binding owns every category. Inserting Generic Models first used to skip Model Groups.
-                BindInstance(doc, _liftDef,
+                // The project already has FPF Lift bound to Generic Models only. Insert returns false.
+                // ReInsert the existing definition with both categories.
+                var liftDef = FindBoundDefinition(doc, LiftName) ?? _liftDef;
+                var extraDef = FindBoundDefinition(doc, ExtraLiftName) ?? _extraLiftDef;
+                var liftOk = Rebind(doc, liftDef, true,
                     BuiltInCategory.OST_GenericModel, BuiltInCategory.OST_IOSModelGroups);
-                BindInstance(doc, _extraLiftDef, BuiltInCategory.OST_GenericModel);
-                BoundDocuments.Add(key);
+                var extraOk = Rebind(doc, extraDef, false, BuiltInCategory.OST_GenericModel);
+                FpfRefreshLog.LogUpdater("binding lift=" + DescribeBinding(doc, LiftName) + " ok=" + liftOk +
+                                         " extra=" + DescribeBinding(doc, ExtraLiftName) + " ok=" + extraOk);
             }
-            catch
+            catch (Exception ex)
             {
-                // parameters remain in extensible storage only
+                FpfRefreshLog.LogUpdater("binding failed " + ex.Message);
             }
             finally
             {
@@ -79,48 +102,96 @@ namespace FloorPatternFlattener.Services
             }
         }
 
-        private static string DocKey(Document doc)
-        {
-            try { return (doc.PathName ?? "") + "|" + (doc.Title ?? ""); }
-            catch { return doc.GetHashCode().ToString(); }
-        }
-
-        private static void BindInstance(Document doc, Definition def, params BuiltInCategory[] cats)
+        private static Definition FindBoundDefinition(Document doc, string name)
         {
             try
             {
-                var set = doc.Application.Create.NewCategorySet();
-                var map = doc.ParameterBindings;
-                if (map.Contains(def) && map.get_Item(def) is InstanceBinding existing)
+                var it = doc.ParameterBindings.ForwardIterator();
+                it.Reset();
+                while (it.MoveNext())
                 {
-                    foreach (Category c in existing.Categories)
-                        if (c != null) set.Insert(c);
+                    if (it.Key is Definition d &&
+                        string.Equals(d.Name, name, StringComparison.OrdinalIgnoreCase))
+                        return d;
                 }
-
-                foreach (var cat in cats)
-                {
-                    var catObj = Category.GetCategory(doc, cat);
-                    if (catObj != null) set.Insert(catObj);
-                }
-
-                if (set.Size == 0) return;
-                var binding = doc.Application.Create.NewInstanceBinding(set);
-#if REVIT_2025 || REVIT_2026 || REVIT_2027
-                if (map.Contains(def))
-                    map.ReInsert(def, binding, GroupTypeId.Constraints);
-                else
-                    map.Insert(def, binding, GroupTypeId.Constraints);
-#else
-                if (map.Contains(def))
-                    map.ReInsert(def, binding, BuiltInParameterGroup.PG_CONSTRAINTS);
-                else
-                    map.Insert(def, binding, BuiltInParameterGroup.PG_CONSTRAINTS);
-#endif
             }
             catch
             {
-                // already bound or not allowed
+                // ignore
             }
+
+            return null;
+        }
+
+        private static string DescribeBinding(Document doc, string name)
+        {
+            try
+            {
+                var def = FindBoundDefinition(doc, name);
+                if (def == null || !(doc.ParameterBindings.get_Item(def) is InstanceBinding b))
+                    return name + ":unbound";
+                var names = new System.Collections.Generic.List<string>();
+                foreach (Category c in b.Categories)
+                    if (c != null) names.Add(c.Name);
+                return name + ":" + (names.Count == 0 ? "none" : string.Join("+", names));
+            }
+            catch (Exception ex)
+            {
+                return name + ":err " + ex.Message;
+            }
+        }
+
+        /// <summary>Returns whether the binding call reported success.</summary>
+        private static bool Rebind(Document doc, Definition def, bool allowReinsert, params BuiltInCategory[] cats)
+        {
+            var map = doc.ParameterBindings;
+            var set = doc.Application.Create.NewCategorySet();
+            var already = map.Contains(def);
+            if (already && map.get_Item(def) is InstanceBinding existing)
+            {
+                foreach (Category c in existing.Categories)
+                    if (c != null) set.Insert(c);
+            }
+
+            foreach (var cat in cats)
+            {
+                var catObj = Category.GetCategory(doc, cat);
+                if (catObj != null) set.Insert(catObj);
+            }
+
+            if (set.Size == 0) return false;
+            var binding = doc.Application.Create.NewInstanceBinding(set);
+#if REVIT_2025 || REVIT_2026 || REVIT_2027
+            var group = GroupTypeId.Constraints;
+#else
+            var group = BuiltInParameterGroup.PG_CONSTRAINTS;
+#endif
+            if (already)
+            {
+                if (!allowReinsert && CategoryCovers(set, cats)) return true;
+                return map.ReInsert(def, binding, group);
+            }
+
+            if (map.Insert(def, binding, group)) return true;
+            // Insert is false when a same-named parameter is already bound under another definition.
+            var again = FindBoundDefinition(doc, def.Name);
+            if (again == null) return false;
+            return map.ReInsert(again, binding, group);
+        }
+
+        private static bool CategoryCovers(CategorySet set, BuiltInCategory[] cats)
+        {
+            foreach (var cat in cats)
+            {
+                var found = false;
+                foreach (Category c in set)
+                {
+                    if (c != null && c.Id.IntegerValue == (int)cat) { found = true; break; }
+                }
+                if (!found) return false;
+            }
+
+            return true;
         }
 
         public static double? ReadLiftMm(Element e)

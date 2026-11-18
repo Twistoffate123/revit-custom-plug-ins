@@ -24,8 +24,6 @@ namespace FloorPatternFlattener.Commands
                 if (!CommandSupport.TryGetDocument(commandData, out var uidoc, out var doc))
                     return Result.Cancelled;
 
-                FpfProjectParameters.EnsureBound(doc);
-
                 if (!CollectFlattenedDirectShapes(uidoc, out var picked, out var selectionNote))
                     return Result.Cancelled;
 
@@ -47,30 +45,66 @@ namespace FloorPatternFlattener.Commands
 
                 CommandSupport.RunTransaction(doc, "Lift Selected Flat Pattern", report, () =>
                 {
-                    foreach (var ds in picked)
+                    FpfProjectParameters.EnsureBound(doc);
+                    var groupsMoved = new HashSet<ElementId>();
+                    foreach (var batch in picked.GroupBy(ds => ds.GroupId ?? ElementId.InvalidElementId))
                     {
-                        if (!canEdit(ds.Id))
+                        var inGroup = batch.Key != null && batch.Key != ElementId.InvalidElementId;
+                        Group group = inGroup ? doc.GetElement(batch.Key) as Group : null;
+                        var memberCount = 0;
+                        if (group != null)
                         {
-                            skippedEdit++;
-                            continue;
+                            try { memberCount = group.GetMemberIds()?.Count ?? 0; } catch { memberCount = 0; }
                         }
-                        try
+
+                        // A grouped DirectShape cannot be moved on its own. The whole group moves once.
+                        var moveGroup = group != null && memberCount > 0 && batch.Count() >= memberCount;
+                        if (moveGroup)
                         {
-                            ElementTransformUtils.MoveElement(doc, ds.Id, new XYZ(0, 0, deltaFeet));
-                            var prev = FpfProjectParameters.ReadExtraLiftMm(ds) ?? 0;
-                            var next = prev + deltaMm;
-                            FpfProjectParameters.WriteExtraLiftMm(ds, next);
-                            var link = FpfStorage.ReadDirectShape(ds) ?? new DirectShapeLinkData();
-                            link.ExtraLiftMm = next;
-                            FpfStorage.WriteDirectShape(ds, link);
-                            moved++;
+                            if (!canEdit(group.Id))
+                            {
+                                skippedEdit += batch.Count();
+                                continue;
+                            }
+                            if (groupsMoved.Add(group.Id))
+                                ElementTransformUtils.MoveElement(doc, group.Id, new XYZ(0, 0, deltaFeet));
                         }
-                        catch (Exception ex)
+
+                        foreach (var ds in batch)
                         {
-                            report.Errors.Add(FpfReport.Describe(ds) + ": " + ex.Message);
+                            if (!canEdit(ds.Id))
+                            {
+                                skippedEdit++;
+                                continue;
+                            }
+                            try
+                            {
+                                if (!moveGroup && !ShapeZOffset.TryOffset(doc, ds, deltaFeet))
+                                {
+                                    report.Errors.Add(FpfReport.Describe(ds) + ": could not move");
+                                    continue;
+                                }
+                                var prev = FpfProjectParameters.ReadExtraLiftMm(ds) ?? 0;
+                                var next = prev + deltaMm;
+                                FpfProjectParameters.WriteExtraLiftMm(ds, next);
+                                var link = FpfStorage.ReadDirectShape(ds) ?? new DirectShapeLinkData();
+                                link.ExtraLiftMm = next;
+                                FpfStorage.WriteDirectShape(ds, link);
+                                moved++;
+                            }
+                            catch (Exception ex)
+                            {
+                                report.Errors.Add(FpfReport.Describe(ds) + ": " + ex.Message);
+                            }
                         }
                     }
                 });
+
+                var idList = string.Join(",", picked.Take(12).Select(ds => ds.Id.ToString()));
+                if (picked.Count > 12) idList += "+" + (picked.Count - 12);
+                FpfRefreshLog.LogUpdater("lift-selected ids=" + idList + " count=" + picked.Count +
+                                         " mm=" + deltaMm.ToString("0.##", CultureInfo.InvariantCulture) +
+                                         " moved=" + moved);
 
                 var summary = pickedCount + " flat pattern element(s) picked; " + moved + " lifted " +
                               deltaMm.ToString("0.##", CultureInfo.InvariantCulture) + " mm in world Z.";

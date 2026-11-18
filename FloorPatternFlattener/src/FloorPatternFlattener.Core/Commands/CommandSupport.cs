@@ -6,6 +6,7 @@ using Autodesk.Revit.UI;
 using Autodesk.Revit.UI.Selection;
 using FloorPatternFlattener.Services;
 using FloorPatternFlattener.Storage;
+using FloorPatternFlattener.Updater;
 
 namespace FloorPatternFlattener.Commands
 {
@@ -123,7 +124,8 @@ namespace FloorPatternFlattener.Commands
 
                 try
                 {
-                    body();
+                    using (FlatPatternUpdaterGate.EnterBulkOperation())
+                        body();
                 }
                 catch (Exception ex)
                 {

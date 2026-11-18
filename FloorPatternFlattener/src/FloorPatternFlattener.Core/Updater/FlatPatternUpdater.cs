@@ -93,6 +93,8 @@ namespace FloorPatternFlattener.Updater
             UpdaterRegistry.AddTrigger(id, new ElementClassFilter(typeof(View)), Element.GetChangeTypeElementAddition());
             // Pattern-group FPF Lift edits. Execute ignores every other group change (including Origin Level Offset).
             UpdaterRegistry.AddTrigger(id, new ElementClassFilter(typeof(Group)), Element.GetChangeTypeAny());
+            // Per-line FPF Extra Lift. Execute only moves when that value changed; it does not rebuild.
+            UpdaterRegistry.AddTrigger(id, new ElementClassFilter(typeof(DirectShape)), Element.GetChangeTypeAny());
 
             if (uiApp != null) FlatPatternUpdaterDeferred.Bind(uiApp);
         }
@@ -126,6 +128,12 @@ namespace FloorPatternFlattener.Updater
             if (TryApplyGroupLifts(doc, modified))
             {
                 FpfRefreshLog.LogUpdater("action=group-lift-only");
+                return;
+            }
+
+            if (TryApplyExtraLifts(doc, modified))
+            {
+                FpfRefreshLog.LogUpdater("action=extra-lift-only");
                 return;
             }
 
@@ -314,6 +322,65 @@ namespace FloorPatternFlattener.Updater
         }
 
         private static int _applyingGroupLift;
+        private static int _applyingExtraLift;
+
+        /// <summary>
+        /// User edited FPF Extra Lift (mm) on a line. Moves that shape only. No hatch rebuild.
+        /// </summary>
+        private static bool TryApplyExtraLifts(Document doc, ICollection<ElementId> modified)
+        {
+            if (_applyingExtraLift > 0 || FlatPatternUpdaterGate.IsSuppressed) return false;
+            if (modified == null || modified.Count == 0) return false;
+            var onlyShapes = true;
+            var saw = false;
+            foreach (var id in modified)
+            {
+                if (!(doc.GetElement(id) is DirectShape ds) || !FpfOutputElements.IsFlattenedDirectShape(ds))
+                {
+                    onlyShapes = false;
+                    continue;
+                }
+
+                saw = true;
+                ApplyExtraLift(doc, ds);
+            }
+
+            return saw && onlyShapes;
+        }
+
+        private static void ApplyExtraLift(Document doc, DirectShape ds)
+        {
+            var param = FpfProjectParameters.ReadExtraLiftMm(ds);
+            if (!param.HasValue) return;
+            var link = FpfStorage.ReadDirectShape(ds) ?? new DirectShapeLinkData();
+            var stored = link.ExtraLiftMm;
+            if (Math.Abs(param.Value - stored) < 0.05) return;
+            var deltaMm = param.Value - stored;
+            _applyingExtraLift++;
+            try
+            {
+                if (!ShapeZOffset.TryOffset(doc, ds, deltaMm / 304.8))
+                {
+                    FpfRefreshLog.LogUpdater("extra-lift-failed id=" + ds.Id);
+                    return;
+                }
+
+                link.ExtraLiftMm = param.Value;
+                FpfStorage.WriteDirectShape(ds, link);
+                FpfRefreshLog.LogUpdater("extra-lift id=" + ds.Id +
+                                         " mm=" + param.Value.ToString("0.##", CultureInfo.InvariantCulture) +
+                                         " deltaMm=" + deltaMm.ToString("0.##", CultureInfo.InvariantCulture));
+            }
+            catch (Exception ex)
+            {
+                FpfRefreshLog.LogUpdater("extra-lift-failed id=" + ds.Id + " " + ex.Message);
+            }
+            finally
+            {
+                _applyingExtraLift--;
+            }
+        }
+
 
         /// <summary>
         /// Whole-floor lift edited on the model group. One MoveElement, no hatch rebuild.

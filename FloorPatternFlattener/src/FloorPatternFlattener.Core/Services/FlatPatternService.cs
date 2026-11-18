@@ -618,8 +618,24 @@ namespace FloorPatternFlattener.Services
                 var gt = typeId != ElementId.InvalidElementId ? _doc.GetElement(typeId) as GroupType : null;
                 if (gt != null)
                     gt.Name = FpfFloorNaming.GroupTypeName(floor);
+                // Do not write GROUP_LEVEL or GROUP_OFFSET_FROM_LEVEL. Revit picks a reference level
+                // when the group is created; changing it moves the hatch.
                 if (group != null)
-                    GeneratedElevationVerifier.TryAlignGroupToFloor(_doc, group, floor);
+                {
+                    string level = "?";
+                    try
+                    {
+                        var lp = group.get_Parameter(BuiltInParameter.GROUP_LEVEL);
+                        if (lp != null && lp.StorageType == StorageType.ElementId)
+                        {
+                            var lvl = _doc.GetElement(lp.AsElementId());
+                            if (lvl != null) level = lvl.Name;
+                        }
+                    }
+                    catch { /* ignore */ }
+                    FpfRefreshLog.LogIfActive("group-level", 0,
+                        "unchanged groupId=" + group.Id + " level=" + level);
+                }
                 return group;
             }
             catch
