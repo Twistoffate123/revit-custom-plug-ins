@@ -195,7 +195,9 @@ namespace FloorPatternFlattener.Storage
         {
             var region = new RegionXY();
             if (sketch?.Points == null || sketch.Points.Count < 3) return region;
-            region.AddPolyline(sketch.Points.Select(p => new[] { p[0], p[1] }).ToList(), close: true);
+            var dense = CutoutCurveMath.DensifyClosedPolygon(sketch.Points);
+            if (dense.Count < 3) dense = sketch.Points.Select(p => new[] { p[0], p[1] }).ToList();
+            region.AddPolyline(dense, close: true);
             return region;
         }
     }

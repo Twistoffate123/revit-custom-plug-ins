@@ -83,6 +83,16 @@ namespace FloorPatternFlattener.Tests
         }
 
         [Fact]
+        public void ShortenedCrossingSegmentCountsAsClippedInList()
+        {
+            var hole = Square(4, 4, 2);
+            var stats = new SegmentPolygonClipper.ClipStats { Input = 1 };
+            var parts = SegmentPolygonClipper.ClipSegmentRemoveInteriors(0, 5, 10, 5,
+                new List<RegionXY> { hole }, 1.0e-6, ref stats);
+            Assert.Equal(2, parts.Count);
+        }
+
+        [Fact]
         public void BboxPrefilterSkipsDistantHole()
         {
             var hole = Square(100, 100, 2);

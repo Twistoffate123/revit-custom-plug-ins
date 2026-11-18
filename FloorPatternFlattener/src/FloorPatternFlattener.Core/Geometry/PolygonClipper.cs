@@ -55,6 +55,35 @@ namespace FloorPatternFlattener.Geometry
     /// </summary>
     public static class PolygonClipper
     {
+        /// <summary>Even-odd point-in test for a region described by boundary edges.</summary>
+        public static bool PointInsideRegion(double x, double y, RegionXY region)
+        {
+            if (region == null || region.IsEmpty) return false;
+            var inside = false;
+            var e = region.RawEdges;
+            for (var i = 0; i < e.Count; i += 4)
+            {
+                var x1 = e[i];
+                var y1 = e[i + 1];
+                var x2 = e[i + 2];
+                var y2 = e[i + 3];
+                if (Math.Abs(y2 - y1) < 1.0e-12) continue;
+                var crosses = (y1 > y) != (y2 > y);
+                if (!crosses) continue;
+                var xHit = x1 + (y - y1) * (x2 - x1) / (y2 - y1);
+                if (xHit > x - 1.0e-9) inside = !inside;
+            }
+            return inside;
+        }
+
+        public static bool PointInsideAnyRegion(double x, double y, IList<RegionXY> regions)
+        {
+            if (regions == null) return false;
+            for (var i = 0; i < regions.Count; i++)
+                if (PointInsideRegion(x, y, regions[i]))
+                    return true;
+            return false;
+        }
         /// <summary>
         /// Clips the infinite line P(t) = (px,py) + t*(dx,dy) (d must be unit length) against the region
         /// using the even-odd rule. Returns sorted, disjoint [t0,t1] intervals that lie inside the region.

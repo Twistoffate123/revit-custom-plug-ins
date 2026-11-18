@@ -28,11 +28,17 @@ namespace FloorPatternFlattener.Services
         {
             if (doc == null || floor == null || input == null || data == null || data.IsEmpty) return;
             var resolved = Resolve(doc, data);
+            var hasFloor = TryFloorPlanBounds(input, out var fMinX, out var fMinY, out var fMaxX, out var fMaxY);
             input.CutoutRegions.Clear();
             input.CutoutRegionKinds.Clear();
             foreach (var entry in resolved.Entries)
             {
                 if (entry.Region == null || entry.Region.IsEmpty) continue;
+                if (hasFloor && entry.Kind == "pick" && IsOutsideFloorBounds(entry.Region, fMinX, fMinY, fMaxX, fMaxY))
+                {
+                    FpfRefreshLog.LogIfActive("cutout", 0, "skip-pick outside-floor-bbox");
+                    continue;
+                }
                 input.CutoutRegions.Add(entry.Region);
                 input.CutoutRegionKinds.Add(entry.Kind ?? "region");
             }
@@ -85,7 +91,7 @@ namespace FloorPatternFlattener.Services
                     {
                         Kind = "sketch",
                         Region = region,
-                        PointCount = sketch.Points.Count,
+                        PointCount = Math.Max(sketch.Points.Count, region.EdgeCount),
                         AreaFt2 = area
                     });
                 else
@@ -142,7 +148,7 @@ namespace FloorPatternFlattener.Services
 
                 FpfRefreshLog.LogIfActive("cutout", 0,
                     "region kind=" + kind +
-                    " points=" + (region.EdgeCount).ToString(CultureInfo.InvariantCulture) +
+                    " edges=" + region.EdgeCount.ToString(CultureInfo.InvariantCulture) +
                     " areaFt2=" + area.ToString("R", CultureInfo.InvariantCulture) +
                     " bbox=" + region.MinX.ToString("R", CultureInfo.InvariantCulture) + "," +
                     region.MinY.ToString("R", CultureInfo.InvariantCulture) + "," +
@@ -186,6 +192,35 @@ namespace FloorPatternFlattener.Services
             for (var i = 0; i < list.Count; i++)
                 if (list[i] == id) return;
             list.Add(id);
+        }
+
+        private static bool TryFloorPlanBounds(FloorHatchInput input, out double minX, out double minY, out double maxX, out double maxY)
+        {
+            minX = double.MaxValue;
+            minY = double.MaxValue;
+            maxX = double.MinValue;
+            maxY = double.MinValue;
+            var any = false;
+            if (input?.Pieces == null) return false;
+            foreach (var p in input.Pieces)
+            {
+                if (p?.Region == null || p.Region.IsEmpty) continue;
+                any = true;
+                if (p.Region.MinX < minX) minX = p.Region.MinX;
+                if (p.Region.MinY < minY) minY = p.Region.MinY;
+                if (p.Region.MaxX > maxX) maxX = p.Region.MaxX;
+                if (p.Region.MaxY > maxY) maxY = p.Region.MaxY;
+            }
+            return any;
+        }
+
+        private static bool IsOutsideFloorBounds(RegionXY region, double fMinX, double fMinY, double fMaxX, double fMaxY)
+        {
+            if (region == null || region.IsEmpty) return true;
+            const double pad = 2.0;
+            var cx = (region.MinX + region.MaxX) * 0.5;
+            var cy = (region.MinY + region.MaxY) * 0.5;
+            return cx < fMinX - pad || cx > fMaxX + pad || cy < fMinY - pad || cy > fMaxY + pad;
         }
     }
 }

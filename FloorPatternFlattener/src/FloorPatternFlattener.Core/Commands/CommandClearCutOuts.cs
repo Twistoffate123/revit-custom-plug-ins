@@ -1,5 +1,4 @@
-using System.Collections.Generic;
-using System.Linq;
+using System.Globalization;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
@@ -39,9 +38,13 @@ namespace FloorPatternFlattener.Commands
                             report.AddNotEditable(floor, "floor not editable");
                             continue;
                         }
-                        FpfStorage.DeleteCutouts(floor);
-                        var svc = new FlatPatternService(doc, report, canEdit, uidoc.ActiveView);
-                        svc.Apply(floor, ApplyMode.Force, applyViewGraphics: false);
+                        CommandSupport.RunTransaction(doc, "Clear Cut-Outs", report, () =>
+                        {
+                            FpfStorage.DeleteCutouts(floor);
+                            FpfRefreshLog.LogIfActive("cutout", 0, "cleared-cutouts storage-deleted");
+                            var svc = new FlatPatternService(doc, report, canEdit, uidoc.ActiveView);
+                            svc.Apply(floor, ApplyMode.Force, applyViewGraphics: false);
+                        });
                     }
                 }
 

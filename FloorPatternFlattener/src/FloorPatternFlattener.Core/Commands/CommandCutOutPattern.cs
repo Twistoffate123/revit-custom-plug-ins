@@ -280,8 +280,14 @@ namespace FloorPatternFlattener.Commands
                     var sketches = CutoutPlanCurve.SketchesFromModelCurves(curves);
                     if (sketches.Count == 0) return false;
                     foreach (var s in sketches)
+                    {
+                        s.Points = CutoutCurveMath.DensifyClosedPolygon(s.Points);
+                        if (s.Points.Count < 3) continue;
                         data.Sketches.Add(s);
-                    return true;
+                        FpfRefreshLog.LogIfActive("cutout", 0,
+                            "sketch-stored points=" + s.Points.Count.ToString(CultureInfo.InvariantCulture));
+                    }
+                    return data.Sketches.Count > 0;
                 }
                 else
                 {

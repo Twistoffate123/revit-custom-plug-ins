@@ -12,9 +12,10 @@ namespace FloorPatternFlattener.Services
         {
             if (doc == null || element == null || !element.IsValidObject) return new RegionXY();
             var region = new RegionXY();
+            const string frameTag = "host-model-xy";
             try
             {
-                CollectGeometry(doc, element, Transform.Identity, region);
+                CollectGeometry(doc, element, Transform.Identity, region, frameTag);
             }
             catch
             {
@@ -26,6 +27,9 @@ namespace FloorPatternFlattener.Services
                 catch { /* ignore */ }
             }
             if (offsetFeet > 1.0e-9) OffsetRegion(region, offsetFeet);
+            if (!region.IsEmpty)
+                FpfRefreshLog.LogIfActive("cutout", 0,
+                    "pick-frame " + frameTag + " uid=" + (element.UniqueId ?? "?"));
             return region;
         }
 
@@ -44,9 +48,11 @@ namespace FloorPatternFlattener.Services
                     if (linked == null) return new RegionXY();
                     var region = new RegionXY();
                     var tr = link.GetTotalTransform();
-                    CollectGeometry(linkDoc, linked, tr, region);
+                    CollectGeometry(linkDoc, linked, tr, region, "revit-link-total-transform");
                     if (region.IsEmpty) AddBoundingBoxFootprint(linked, tr, region);
                     if (offsetFeet > 1.0e-9) OffsetRegion(region, offsetFeet);
+                    if (!region.IsEmpty)
+                        FpfRefreshLog.LogIfActive("cutout", 0, "pick-frame revit-link-total-transform");
                     return region;
                 }
             }
@@ -95,7 +101,7 @@ namespace FloorPatternFlattener.Services
             return doc.GetElement(storedKey);
         }
 
-        private static void CollectGeometry(Document doc, Element element, Transform tr, RegionXY region)
+        private static void CollectGeometry(Document doc, Element element, Transform tr, RegionXY region, string frameTag)
         {
             var opt = new Options { ComputeReferences = false, IncludeNonVisibleObjects = false };
             try { opt.DetailLevel = ViewDetailLevel.Fine; } catch { /* ignore */ }
@@ -112,10 +118,21 @@ namespace FloorPatternFlattener.Services
             {
                 if (obj is Solid solid && solid.Volume > 1.0e-12)
                     ProjectSolid(solid, tr, region);
-                else if (obj is GeometryInstance inst)
+                else if (obj is GeometryInstance gi)
                 {
-                    var sub = inst.GetInstanceGeometry();
-                    if (sub != null) WalkGeometry(sub, tr.Multiply(inst.Transform), region);
+                    GeometryElement inst = null;
+                    try { inst = gi.GetInstanceGeometry(); } catch { inst = null; }
+                    if (inst != null)
+                        WalkGeometry(inst, tr, region);
+                    else
+                    {
+                        var sym = gi.GetSymbolGeometry();
+                        var t = gi.Transform;
+                        if (sym != null && t != null)
+                            WalkGeometry(sym, tr.Multiply(t), region);
+                        else if (sym != null)
+                            WalkGeometry(sym, tr, region);
+                    }
                 }
                 else if (obj is Mesh mesh)
                     ProjectMesh(mesh, tr, region);

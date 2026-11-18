@@ -24,25 +24,85 @@ namespace FloorPatternFlattener.Geometry
             var len = Math.Sqrt(dx * dx + dy * dy);
             if (len < minLen) return new List<double[]>();
 
-            var ux = dx / len;
-            var uy = dy / len;
-            var outside = new List<double[]> { new[] { 0.0, len } };
+            var anyBbox = false;
+            for (var r = 0; r < cutouts.Count; r++)
+            {
+                var region = cutouts[r];
+                if (region == null || region.IsEmpty) continue;
+                if (SegmentIntersectsAxisAlignedBox(x1, y1, x2, y2, region.MinX, region.MinY, region.MaxX, region.MaxY))
+                {
+                    anyBbox = true;
+                    break;
+                }
+            }
+            if (!anyBbox)
+                return new List<double[]> { new[] { x1, y1, x2, y2 } };
 
+            var breaks = new List<double> { 0.0, 1.0 };
+            const double tol = 1.0e-9;
             foreach (var region in cutouts)
             {
                 if (region == null || region.IsEmpty) continue;
                 if (!SegmentIntersectsAxisAlignedBox(x1, y1, x2, y2, region.MinX, region.MinY, region.MaxX, region.MaxY))
                     continue;
-
-                var inside = PolygonClipper.ClipLine(region, x1, y1, ux, uy);
-                if (inside.Count == 0) continue;
-                var onSegment = ClipIntervalsToSegment(inside, len);
-                if (onSegment.Count == 0) continue;
-                outside = PolygonClipper.SubtractIntervals(outside, onSegment);
-                if (outside.Count == 0) break;
+                var e = region.RawEdges;
+                for (var i = 0; i < e.Count; i += 4)
+                {
+                    if (TrySegmentEdgeIntersection(x1, y1, x2, y2, e[i], e[i + 1], e[i + 2], e[i + 3], tol, out var t))
+                        breaks.Add(t);
+                }
             }
 
-            return EmitPieces(x1, y1, ux, uy, outside, minLen);
+            breaks.Sort();
+            var merged = new List<double> { breaks[0] };
+            for (var i = 1; i < breaks.Count; i++)
+            {
+                if (breaks[i] - merged[merged.Count - 1] > tol)
+                    merged.Add(breaks[i]);
+                else
+                    merged[merged.Count - 1] = breaks[i];
+            }
+
+            var pieces = new List<double[]>();
+            for (var i = 0; i + 1 < merged.Count; i++)
+            {
+                var t0 = merged[i];
+                var t1 = merged[i + 1];
+                if ((t1 - t0) * len < minLen) continue;
+                var mx = x1 + dx * (t0 + t1) * 0.5;
+                var my = y1 + dy * (t0 + t1) * 0.5;
+                if (PolygonClipper.PointInsideAnyRegion(mx, my, cutouts)) continue;
+                pieces.Add(new[]
+                {
+                    x1 + dx * t0,
+                    y1 + dy * t0,
+                    x1 + dx * t1,
+                    y1 + dy * t1
+                });
+            }
+
+            return pieces;
+        }
+
+        private static bool TrySegmentEdgeIntersection(double ax, double ay, double bx, double by,
+            double cx, double cy, double dx, double dy, double tol, out double tOnAb)
+        {
+            tOnAb = 0;
+            var rpx = bx - ax;
+            var rpy = by - ay;
+            var spx = dx - cx;
+            var spy = dy - cy;
+            var denom = rpx * spy - rpy * spx;
+            if (Math.Abs(denom) < 1.0e-15) return false;
+            var qmx = cx - ax;
+            var qmy = cy - ay;
+            tOnAb = (qmx * spy - qmy * spx) / denom;
+            var uOnCd = (qmx * rpy - qmy * rpx) / denom;
+            if (tOnAb < -tol || tOnAb > 1.0 + tol || uOnCd < -tol || uOnCd > 1.0 + tol)
+                return false;
+            if (tOnAb < tol || tOnAb > 1.0 - tol)
+                return false;
+            return true;
         }
 
         /// <summary>True when the finite segment can meet the axis-aligned box (not endpoint-in-box).</summary>
@@ -100,39 +160,6 @@ namespace FloorPatternFlattener.Geometry
             var u = ((cx - ax) * (by - ay) - (cy - ay) * (bx - ax)) / denom;
             const double tol = 1.0e-9;
             return t >= -tol && t <= 1.0 + tol && u >= -tol && u <= 1.0 + tol;
-        }
-
-        private static List<double[]> ClipIntervalsToSegment(IList<double[]> inside, double segLen)
-        {
-            var clipped = new List<double[]>();
-            if (inside == null || segLen < 1.0e-12) return clipped;
-            foreach (var iv in inside)
-            {
-                if (iv == null || iv.Length < 2) continue;
-                var a0 = Math.Max(0, iv[0]);
-                var a1 = Math.Min(segLen, iv[1]);
-                if (a1 - a0 > FpfOptions.GeometryTolerance)
-                    clipped.Add(new[] { a0, a1 });
-            }
-            return clipped;
-        }
-
-        private static List<double[]> EmitPieces(double x1, double y1, double ux, double uy,
-            List<double[]> intervals, double minLen)
-        {
-            var pieces = new List<double[]>();
-            foreach (var iv in intervals)
-            {
-                var a0 = iv[0];
-                var a1 = iv[1];
-                if (a1 - a0 < minLen) continue;
-                var px1 = x1 + ux * a0;
-                var py1 = y1 + uy * a0;
-                var px2 = x1 + ux * a1;
-                var py2 = y1 + uy * a1;
-                pieces.Add(new[] { px1, py1, px2, py2 });
-            }
-            return pieces;
         }
     }
 }

@@ -6,8 +6,8 @@ namespace FloorPatternFlattener.Geometry
     /// <summary>Planar curve sampling and loop chaining for cut-out sketches (internal feet, XY).</summary>
     public static class CutoutCurveMath
     {
-        public const double DefaultChordMm = 5.0;
-        public const int MinFullCircleSegments = 32;
+        public const double DefaultChordMm = 2.0;
+        public const int MinFullCircleSegments = 64;
 
         public const double MillimetresPerFoot = 304.8;
 
@@ -177,6 +177,46 @@ namespace FloorPatternFlattener.Geometry
             const double dedupeTol = 1.0e-12;
             if (loop.Count == 0 || !Near(loop[loop.Count - 1], pt, dedupeTol))
                 loop.Add(new[] { pt[0], pt[1] });
+        }
+
+        /// <summary>Subdivides a closed polygon so every edge is at most one chord tolerance long.</summary>
+        public static List<double[]> DensifyClosedPolygon(IList<double[]> points)
+        {
+            var dense = new List<double[]>();
+            if (points == null || points.Count < 2) return dense;
+            var chord = ChordToleranceFeet;
+            var n = points.Count;
+            for (var i = 0; i < n; i++)
+            {
+                var a = points[i];
+                var b = points[(i + 1) % n];
+                if (a == null || b == null || a.Length < 2 || b.Length < 2) continue;
+                AppendSubdividedEdge(dense, a, b, chord);
+            }
+            if (dense.Count >= 2 && Near(dense[0], dense[dense.Count - 1], 1.0e-12))
+                dense.RemoveAt(dense.Count - 1);
+            return dense;
+        }
+
+        private static void AppendSubdividedEdge(List<double[]> dest, double[] a, double[] b, double chord)
+        {
+            var dx = b[0] - a[0];
+            var dy = b[1] - a[1];
+            var len = Math.Sqrt(dx * dx + dy * dy);
+            if (len < 1.0e-12)
+            {
+                if (dest.Count == 0 || !Near(dest[dest.Count - 1], a, 1.0e-12))
+                    dest.Add(new[] { a[0], a[1] });
+                return;
+            }
+            var steps = Math.Max(1, (int)Math.Ceiling(len / Math.Max(chord, 1.0e-9)));
+            if (dest.Count == 0 || !Near(dest[dest.Count - 1], a, 1.0e-12))
+                dest.Add(new[] { a[0], a[1] });
+            for (var s = 1; s <= steps; s++)
+            {
+                var t = (double)s / steps;
+                dest.Add(new[] { a[0] + dx * t, a[1] + dy * t });
+            }
         }
 
         public static bool PointsNear(double[] a, double[] b, double tol) => Near(a, b, tol);

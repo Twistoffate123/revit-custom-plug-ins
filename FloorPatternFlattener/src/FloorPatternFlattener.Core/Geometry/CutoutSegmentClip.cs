@@ -38,9 +38,7 @@ namespace FloorPatternFlattener.Geometry
                     stats.Removed++;
                     continue;
                 }
-                if (parts.Count == 1 &&
-                    Math.Abs(parts[0][0] - x1) < 1.0e-9 && Math.Abs(parts[0][1] - y1) < 1.0e-9 &&
-                    Math.Abs(parts[0][2] - x2) < 1.0e-9 && Math.Abs(parts[0][3] - y2) < 1.0e-9)
+                if (parts.Count == 1 && SegmentUnchanged(parts[0], x1, y1, x2, y2, minLen))
                 {
                     next.Add(seg);
                     stats.Kept++;
@@ -67,6 +65,19 @@ namespace FloorPatternFlattener.Geometry
             foreach (var s in next) segments.Add(s);
             stats.Kept = next.Count;
             return stats;
+        }
+
+        private static bool SegmentUnchanged(double[] part, double x1, double y1, double x2, double y2, double minLen)
+        {
+            if (part == null || part.Length < 4) return false;
+            var tol = Math.Max(minLen, 1.0e-6);
+            var sameOrder =
+                Math.Abs(part[0] - x1) <= tol && Math.Abs(part[1] - y1) <= tol &&
+                Math.Abs(part[2] - x2) <= tol && Math.Abs(part[3] - y2) <= tol;
+            var revOrder =
+                Math.Abs(part[0] - x2) <= tol && Math.Abs(part[1] - y2) <= tol &&
+                Math.Abs(part[2] - x1) <= tol && Math.Abs(part[3] - y1) <= tol;
+            return sameOrder || revOrder;
         }
 
         private static double ParamAlong(double x1, double y1, double x2, double y2, double px, double py)
