@@ -2,7 +2,7 @@ using System;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Interop;
+using System.Windows.Input;
 using FloorPatternFlattener.Geometry;
 
 namespace FloorPatternFlattener.UI
@@ -70,13 +70,17 @@ namespace FloorPatternFlattener.UI
             Width = 520;
             MinWidth = 380;
             MinHeight = 300;
-            SizeToContent = SizeToContent.Height; // initial height only; user resizing turns this off
-            ResizeMode = ResizeMode.CanResizeWithGrip;
             WindowStartupLocation = WindowStartupLocation.Manual;
             Left = 40;
             Top = 120;
-            ShowInTaskbar = false;
-            if (owner != IntPtr.Zero) new WindowInteropHelper(this).Owner = owner;
+            WpfDialog.Prepare(this, SizeToContent.Height);
+            WpfDialog.Own(this, owner);
+            PreviewKeyDown += (_, e) =>
+            {
+                if (e.Key != Key.Escape) return;
+                Close(state.PreviewLive ? DialogAction.Discard : DialogAction.Cancel);
+                e.Handled = true;
+            };
 
             // Layout: action buttons docked at the bottom, everything else in a scrollable panel that stretches
             // with the window (horizontally and vertically).
@@ -171,9 +175,11 @@ namespace FloorPatternFlattener.UI
             buttons.Children.Add(Button(state.PreviewLive ? "Update Preview" : "Preview", () => Close(DialogAction.Preview),
                 "Build the result temporarily and show it in the view; nothing is kept until Apply."));
             buttons.Children.Add(Button("Apply", () => Close(DialogAction.Apply), "Create / replace the flat pattern."));
-            buttons.Children.Add(Button(state.PreviewLive ? "Discard" : "Cancel",
+            var dismiss = Button(state.PreviewLive ? "Discard" : "Cancel",
                 () => Close(state.PreviewLive ? DialogAction.Discard : DialogAction.Cancel),
-                "Close without changing the model (a live preview is rolled back)."));
+                "Close without changing the model (a live preview is rolled back). Esc does the same.");
+            dismiss.IsCancel = true;
+            buttons.Children.Add(dismiss);
             DockPanel.SetDock(buttons, Dock.Bottom);
             dock.Children.Add(buttons);
             dock.Children.Add(new ScrollViewer
@@ -258,18 +264,30 @@ namespace FloorPatternFlattener.UI
         public ProgressWindow(string title, int max, IntPtr owner)
         {
             Title = title;
-            Width = 380;
-            MinWidth = 300;
-            SizeToContent = SizeToContent.Height;
-            ResizeMode = ResizeMode.CanResizeWithGrip;
+            Width = 420;
+            MinWidth = 320;
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
-            ShowInTaskbar = false;
-            if (owner != IntPtr.Zero) new WindowInteropHelper(this).Owner = owner;
+            WpfDialog.Prepare(this, SizeToContent.Height);
+            WpfDialog.Own(this, owner);
             var root = new StackPanel { Margin = new Thickness(12) };
             _text = new TextBlock { Margin = new Thickness(0, 0, 0, 6), TextWrapping = TextWrapping.Wrap };
             _bar = new ProgressBar { Height = 16, Minimum = 0, Maximum = Math.Max(1, max) };
-            var cancel = new Button { Content = "Cancel", HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 8, 0, 0), Padding = new Thickness(10, 2, 10, 2) };
+            var cancel = new Button
+            {
+                Content = "Cancel",
+                IsCancel = true,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Margin = new Thickness(0, 8, 16, 4),
+                Padding = new Thickness(10, 4, 10, 4)
+            };
             cancel.Click += (s, e) => { Cancelled = true; _text.Text = "Cancelling after the current floor..."; };
+            PreviewKeyDown += (_, e) =>
+            {
+                if (e.Key != Key.Escape) return;
+                Cancelled = true;
+                _text.Text = "Cancelling after the current floor...";
+                e.Handled = true;
+            };
             root.Children.Add(_text);
             root.Children.Add(_bar);
             root.Children.Add(cancel);
