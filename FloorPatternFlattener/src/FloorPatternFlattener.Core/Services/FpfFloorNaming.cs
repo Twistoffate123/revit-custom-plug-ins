@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Autodesk.Revit.DB;
 using FloorPatternFlattener.Geometry;
 
@@ -33,8 +34,38 @@ namespace FloorPatternFlattener.Services
             return "Floor";
         }
 
-        /// <summary>Instance Comments: floor label only.</summary>
+        /// <summary>Instance Comments on the model group (floor label only; unchanged).</summary>
         public static string InstanceComments(Floor floor) => FloorDisplayName(floor);
+
+        /// <summary>DirectShape instance Comments: floor label plus layer tag for filters.</summary>
+        public static string ChunkInstanceComments(Floor floor, IList<Segment3> segs, PatternLayerKind chunkKind)
+        {
+            var baseText = InstanceComments(floor);
+            return baseText + ChunkLayerTag(segs, chunkKind);
+        }
+
+        private static string ChunkLayerTag(IList<Segment3> segs, PatternLayerKind chunkKind)
+        {
+            var hasFg = false;
+            var hasBg = false;
+            var hasEdge = false;
+            if (segs != null)
+            {
+                foreach (var seg in segs)
+                {
+                    if (seg?.Layer == null) continue;
+                    if (seg.Layer.Kind == PatternLayerKind.Foreground) hasFg = true;
+                    else if (seg.Layer.Kind == PatternLayerKind.Background) hasBg = true;
+                    else if (seg.Layer.Kind == PatternLayerKind.Edge) hasEdge = true;
+                }
+            }
+            if (hasFg && hasBg) return " | Foreground+Background";
+            if (hasEdge && !hasFg && !hasBg) return " | Edge";
+            if (hasBg && !hasFg) return " | Background";
+            if (chunkKind == PatternLayerKind.Background) return " | Background";
+            if (chunkKind == PatternLayerKind.Edge) return " | Edge";
+            return " | Foreground";
+        }
 
         /// <summary>
         /// DirectShapeType name shown in Properties (floor name). Layer kinds use invisible suffixes so types stay unique.

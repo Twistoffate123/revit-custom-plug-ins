@@ -526,7 +526,7 @@ namespace FloorPatternFlattener.Services
             var extraMm = 0.0;
             if (_extraLiftByChunk.TryGetValue(slot, out var preserved)) extraMm = preserved;
             ConfigureShape(ds, floor, slot, shapes.Count + 1, _styles.GetFloorLayerTypeId(floor, kind),
-                FpfFloorNaming.LayerLabel(kind), extraMm);
+                FpfFloorNaming.LayerLabel(kind), extraMm, segs, kind);
             if (Math.Abs(extraMm) > 1.0e-9)
             {
                 try
@@ -760,7 +760,7 @@ namespace FloorPatternFlattener.Services
         }
 
         private void ConfigureShape(DirectShape ds, Floor floor, int chunkIndex, int chunkCount, ElementId typeId,
-            string label, double extraLiftMm = 0)
+            string label, double extraLiftMm, IList<Segment3> segs, PatternLayerKind chunkKind)
         {
             // Type per layer / mode: lets view filters target "Type Name" / "Type Comments" =
             // FPF Flat Pattern - Foreground / Background.
@@ -780,7 +780,8 @@ namespace FloorPatternFlattener.Services
             try { ds.SetName(FpfFloorNaming.FloorDisplayName(floor)); }
             catch { /* ignore */ }
 
-            SetString(ds, BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS, FpfFloorNaming.InstanceComments(floor));
+            SetString(ds, BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS,
+                FpfFloorNaming.ChunkInstanceComments(floor, segs, chunkKind));
 
             // Phases: match the floor.
             try
